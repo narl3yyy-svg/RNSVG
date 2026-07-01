@@ -1,0 +1,122 @@
+# Documentation
+LICENSE
+donate.md
+screenshots/
+docs/
+
+vendor/lxmfy/tests/
+vendor/lxmfy/docs/
+vendor/lxmfy/.gitea/
+
+# Development files
+android/
+android/keystore/
+*.jks
+*.keystore
+Makefile
+*.apk
+*.aab
+
+# Build artifacts and cache
+/build/
+/dist/
+/build-dir/
+/python-dist/
+/maven/
+/.local/
+/android/chaquopy-recipes/**/build/
+/android/chaquopy-recipes/**/dist/
+/android/chaquopy-recipes/**/env/
+/android/chaquopy-recipes/**/requirements/
+/android/chaquopy-recipes/**/fix_wheel/
+/android/chaquopy-recipes/**/wrappers/
+/android/chaquopy-recipes/**/target/
+/android/chaquopy-recipes/**/*.orig
+/android/chaquopy-recipes/**/*.rej
+/node_modules/
+.pnpm-store/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.o
+*.a
+*.la
+*.lo
+*.dll
+*.dylib
+.Python
+*.egg-info/
+*.egg
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker files
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Local storage and runtime data
+storage/
+testing/
+telemetry_test_lxmf/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+.coverage
+
+test-results/
+playwright-report/
+blob-report/
+
+# Host-built micron WASM binaries (Docker/build fetch fresh copies)
+meshchatx/src/frontend/public/vendor/micron-parser-go/micron-parser-go.wasm
+meshchatx/src/frontend/public/vendor/micron-parser-go/wasm_exec.js
+
+.hypothesis
+.hypothesis/
+
+# Arch Linux packaging artifacts
+/packaging/arch/src/
+/packaging/arch/pkg/
+/packaging/arch/*.pkg.tar.zst
+/packaging/arch/MeshChatX/
+/packaging/arch/reticulum-meshchatx/
+
+*.exe

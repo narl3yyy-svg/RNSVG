@@ -1,0 +1,64 @@
+# Maintainer: Ivan <ivan@quad4.io>
+pkgname=reticulum-meshchatx-git
+_pkgname=reticulum-meshchatx
+pkgver=4.7.1.r0.gebacc00
+pkgrel=1
+pkgdesc="A simple mesh network communications app powered by the Reticulum Network Stack"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Quad4-Software/MeshChatX"
+license=('0BSD' 'MIT')
+depends=('opus' 'opusfile' 'portaudio' 'espeak-ng')
+makedepends=('git' 'nodejs' 'pnpm' 'python' 'python-pip' 'python-setuptools' 'python-wheel')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+https://github.com/Quad4-Software/MeshChatX.git"
+        "reticulum-meshchatx.desktop")
+sha256sums=('SKIP'
+            '366182e198df672bb51893f7cf7f339079bf80319c24c107216c1b96d33fd267')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' || \
+  printf "4.7.1.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$_pkgname"
+  export PNPM_HOME="$srcdir/.pnpm-home"
+  local _venv="$srcdir/$_pkgname/.build-venv"
+
+  pnpm install --frozen-lockfile
+
+  python -m venv "$_venv"
+  # shellcheck disable=SC1091
+  source "$_venv/bin/activate"
+  pip install --upgrade pip setuptools wheel
+  pip install -r requirements.txt
+  pip install 'cx-freeze>=7.0.0'
+  pip install --no-build-isolation .
+  python scripts/patch_lxst_pyogg_ogg_ctypes.py
+}
+
+build() {
+  cd "$_pkgname"
+  export PNPM_HOME="$srcdir/.pnpm-home"
+  export PYTHON_CMD="$srcdir/$_pkgname/.build-venv/bin/python"
+
+  pnpm run electron-postinstall
+  pnpm run build
+  pnpm exec electron-builder --linux --dir
+}
+
+package() {
+  cd "$_pkgname"
+  
+  install -d "$pkgdir/usr/lib/$_pkgname"
+  cp -a dist/linux-unpacked/* "$pkgdir/usr/lib/$_pkgname/"
+  
+  install -d "$pkgdir/usr/bin"
+  ln -s "/usr/lib/$_pkgname/reticulum-meshchatx" "$pkgdir/usr/bin/$_pkgname"
+  
+  install -Dm644 "$srcdir/reticulum-meshchatx.desktop" "$pkgdir/usr/share/applications/reticulum-meshchatx.desktop"
+  install -Dm644 logo/logo.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/reticulum-meshchatx.png"
+}
+

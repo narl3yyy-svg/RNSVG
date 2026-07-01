@@ -1,0 +1,403 @@
+# Reticulum MeshChatX
+
+[English](../README.md) | [Русский](README.ru.md) | [Italiano](README.it.md) | [中文](README.zh.md) | [日本語](README.ja.md)
+
+Ein umfassend modifizierter und funktionsreicher Fork von Reticulum MeshChat von Liam Cottle.
+
+Dieses Projekt ist unabhaengig vom originalen Reticulum MeshChat und steht in keiner Verbindung dazu.
+
+- Website: [meshchatx.com](https://meshchatx.com)
+- Quellcode: [github.com/Quad4-Software/MeshChatX](https://github.com/Quad4-Software/MeshChatX)
+- Mirror: [lavaforge.org/Reticulum-Things/MeshChatX](https://lavaforge.org/Reticulum-Things/MeshChatX)
+- Releases: [github.com/Quad4-Software/MeshChatX](https://github.com/Quad4-Software/MeshChatX)
+- Aenderungsprotokoll: [`CHANGELOG.md`](../CHANGELOG.md)
+- Spenden: [`donate.md`](../donate.md) ([Spenden](#spenden))
+- LXMF: `f489752fbef161c64d65e385a4e9fc74`
+- Umbrel App Store: [apps.umbrel.com/app/meshchatx](https://apps.umbrel.com/app/meshchatx)
+
+<a href="https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/Quad4-Software/MeshChatX"><img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" height="60" alt="Get it on Obtainium"></a>
+
+rngit NomadNet Node: `5399f5a0212477618821e91e88ce053b:/page/index.mu`
+
+rngit: `git clone rns://926baefe13daf5178c174f158dae1b45/quad4/MeshChatX`
+
+MeshChatX NomadNet Node: `c10d80b1a42fa958c37a6cc30dc04f53:/page/index.mu`
+
+## Wichtige Aenderungen gegenueber Reticulum MeshChat
+
+- Verwendet LXST fuer Anrufe
+- Peewee-ORM durch direktes SQL ersetzt
+- Axios durch natives `fetch` ersetzt
+- Electron 41.x (mit Node-24-Laufzeit)
+- `.whl`-Pakete mit Webserver und eingebauten Frontend-Assets fuer mehr Deploy-Optionen
+- i18n
+- PNPM und Poetry fuer Abhaengigkeiten
+
+> [!WARNING]
+> MeshChatX garantiert keine Datenkompatibilitaet mit aelteren Reticulum-MeshChat-Versionen. Erstellen Sie vor Migration oder Tests eine Datensicherung.
+
+> [!WARNING]
+> Aeltere Systeme werden noch nicht unterstuetzt. Aktuelle Basis: Python `>=3.11` und Node `>=24` (Electron 41 entspricht Node 24; `engines` in `package.json` und CI folgen derselben Linie).
+
+## Voraussetzungen
+
+- Python `>=3.11` (aus `pyproject.toml`)
+- Node.js `>=24` (aus `package.json`, Feld `engines`)
+- pnpm `11.1.2` (aus `package.json`, Feld `packageManager`)
+- Poetry (verwendet in `Taskfile.yml` und CI-Workflows)
+
+**Browser Versions Required:**
+
+Safari 16.4 oder neuer, Chrome 111 oder neuer, Firefox 128 oder neuer (Web-Oberflaeche).
+
+```bash
+task install
+task lint:all
+task test:all
+task build:all
+```
+
+## Installationsmethoden
+
+Waehlen Sie die Methode passend zu Umgebung und Paketierung.
+
+| Methode               | Frontend enthalten | Architekturen                               | Geeignet fuer                       |
+| --------------------- | ------------------ | ------------------------------------------- | ----------------------------------- |
+| Docker-Image          | Ja                 | `linux/amd64`, `linux/arm64`                | Schnellster Start auf Linux-Servern |
+| Python Wheel (`.whl`) | Ja                 | Jede Python-unterstuetzte Architektur       | Headless/Webserver ohne Node-Build  |
+| Linux AppImage        | Ja                 | `x64`, `arm64`                              | Portabler Desktop-Einsatz           |
+| Debian-Paket (`.deb`) | Ja                 | `x64`, `arm64`                              | Debian/Ubuntu-Installation          |
+| RPM-Paket (`.rpm`)    | Ja                 | Vom CI-Runner abhaengig (Veroeffentlichung) | Fedora/RHEL/openSUSE                |
+| Aus Quellcode         | Lokal gebaut       | Host-Architektur                            | Entwicklung und individuelle Builds |
+
+Hinweise:
+
+- GitHub Actions baut getaggte Releases (Linux Wheel/AppImage/deb/rpm, Windows, macOS, Flatpak, Android-APKs bei Tags auf dev/master, SLSA, Entwurfs-Release) in einem Lauf über `.github/workflows/build-release.yml`; das Container-Image über `.github/workflows/docker.yml`. Android-CI für Branches und PRs: `.github/workflows/android-build.yml`.
+- Linux `x64` und `arm64` AppImage + DEB werden auf GitHub gebaut; RPM wird versucht und hochgeladen, wenn es erzeugt wird.
+
+## Docker
+
+- **Docker Hub:** `quad4io/meshchatx`
+- **GHCR:** `ghcr.io/quad4-software/meshchatx`
+
+```bash
+docker compose up -d
+```
+
+```bash
+docker run -d --name reticulum-meshchatx \
+  --restart unless-stopped \
+  --security-opt no-new-privileges:true \
+  -p 127.0.0.1:8000:8000 \
+  -v meshchatx-config:/config \
+  ghcr.io/quad4-software/meshchatx:latest
+```
+
+Sie koennen `quad4io/meshchatx:latest` statt des GHCR-Images verwenden, wenn Sie Docker Hub bevorzugen.
+
+Standard-Compose-Datei:
+
+- `127.0.0.1:8000` auf dem Host -> Container-Port `8000`
+- Docker-Benanntes Volume **`meshchatx-config`** -> **`/config`** fuer Persistenz (passt zum Image-Benutzer **meshchat**, UID 1000, ohne Host-**chown** bei Bind-Mounts)
+
+**Optional: Host-Verzeichnis einbinden**
+
+Ersetzen Sie die Volume-Zeile durch `-v "$(pwd)/meshchat-config:/config"` (Compose: `volumes`-Eintrag des Service anpassen). Der Container laeuft als **UID 1000**; das Host-Verzeichnis muss dafuer beschreibbar sein (typisch: `sudo chown -R 1000:1000 ./meshchat-config`). Leeres Verzeichnis vor dem ersten Start anlegen, damit Docker es nicht mit unpassenden Rechten erzeugt.
+
+**Named Volume pruefen oder loeschen**
+
+```bash
+docker volume inspect meshchatx-config
+docker rm -f reticulum-meshchatx
+docker volume rm meshchatx-config
+```
+
+## Installation aus Release-Artefakten
+
+### 1) Linux AppImage (x64/arm64)
+
+1. `ReticulumMeshChatX-v<version>-linux-<arch>.AppImage` von den Releases herunterladen.
+2. Ausfuehrbar machen und starten:
+
+```bash
+chmod +x ./ReticulumMeshChatX-v*-linux-*.AppImage
+./ReticulumMeshChatX-v*-linux-*.AppImage
+```
+
+### 2) Debian/Ubuntu `.deb` (x64/arm64)
+
+1. `ReticulumMeshChatX-v<version>-linux-<arch>.deb` herunterladen.
+2. Installieren:
+
+```bash
+sudo apt install ./ReticulumMeshChatX-v*-linux-*.deb
+```
+
+### 3) RPM-basierte Systeme
+
+1. `ReticulumMeshChatX-v<version>-linux-<arch>.rpm` herunterladen, falls im Release vorhanden.
+2. Installieren:
+
+```bash
+sudo rpm -Uvh ./ReticulumMeshChatX-v*-linux-*.rpm
+```
+
+### 4) Python Wheel (`.whl`)
+
+Release-Wheels enthalten die gebauten Web-Assets.
+
+```bash
+pip install ./reticulum_meshchatx-*-py3-none-any.whl
+meshchatx --headless
+```
+
+`pipx` wird ebenfalls unterstuetzt:
+
+```bash
+pipx install ./reticulum_meshchatx-*-py3-none-any.whl
+```
+
+## Aus Quellcode ausfuehren (Webserver-Modus)
+
+Fuer Entwicklung oder lokale Custom-Builds.
+
+```bash
+git clone https://github.com/Quad4-Software/MeshChatX.git
+cd MeshChatX
+corepack enable
+pnpm config set verify-store-integrity true
+pnpm install --frozen-lockfile
+pip install "uv==0.11.15"
+uv lock --check
+uv sync --group dev
+pnpm run build-frontend
+uv run python -m meshchatx.meshchat --headless --host 127.0.0.1
+```
+
+Hinweise zu den Installationsbefehlen:
+
+- `pnpm install --frozen-lockfile` verweigert Aenderungen an `pnpm-lock.yaml` und schlaegt fehl, wenn die Lockdatei nicht zu `package.json` passt. Damit wird verhindert, dass eine unerwartete Upstream-Version still eingespielt wird.
+- `verify-store-integrity=true` ist auch in der projektweiten `pnpm-workspace.yaml` gesetzt; die explizite `pnpm config set`-Zeile haertet zusaetzlich die Benutzerkonfiguration.
+- Lifecycle-Skripte (`preinstall`/`postinstall`) sind in pnpm v11+ standardmaessig blockiert. Nur die unter `allowBuilds` in `pnpm-workspace.yaml` aufgefuehrten Pakete duerfen Installationsskripte ausfuehren (aktuell `electron`, `electron-winstaller`, `esbuild`).
+- `uv lock --check` schlaegt frueh fehl, wenn `uv.lock` nicht mit `pyproject.toml` synchron ist; `uv sync --group dev` aufloest danach nur aus der Lockdatei.
+- Fuer eine strikte Lockfile-Installation (ohne implizite Lock-Aktualisierung) Poetry mit `pip install "uv==0.11.15"` pinnen, passend zur CI-Version.
+
+Wenn Sie absichtlich Abhaengigkeiten aktualisieren wollen, fuehren Sie `pnpm update` / `uv lock` in einem dedizierten Commit aus und pruefen Sie das resultierende Lockdatei-Diff vor dem Push.
+
+## Sandboxing (Linux)
+
+Um das native `meshchatx`-Programm (Alias: `meshchat`) mit zusaetzlicher Dateisystem-Isolation auszufuehren, koennen Sie **Firejail** oder **Bubblewrap** (`bwrap`) nutzen, bei weiterhin normalem Netzwerkzugriff fuer Reticulum und die Web-Oberflaeche. Vollstaendige Beispiele (pip/pipx, Poetry, Hinweise zu USB-Seriell) finden Sie in:
+
+- [`docs/meshchatx_linux_sandbox.md`](../docs/meshchatx_linux_sandbox.md)
+
+Dieselbe Seite erscheint in der in-app-Liste **Dokumentation** (MeshChatX-Dokumentation), wenn sie aus den gebuendelten oder synchronisierten `meshchatx-docs`-Dateien ausgeliefert wird.
+
+## Linux-Desktop: Emoji-Schriften
+
+Die Emoji-Auswahl rendert Standard-Unicode-Emoji mit den Systemschriften (Electron/Chromium). Wenn Emoji als leere Kaestchen („Tofu“) erscheinen, installieren Sie ein Farb-Emoji-Paket und starten Sie die App neu.
+
+| Distribution (Beispiele)   | Paket                                                                |
+| -------------------------- | -------------------------------------------------------------------- |
+| Arch Linux, Artix, Manjaro | `noto-fonts-emoji` (`sudo pacman -S noto-fonts-emoji`)               |
+| Debian, Ubuntu             | `fonts-noto-color-emoji` (`sudo apt install fonts-noto-color-emoji`) |
+| Fedora                     | `google-noto-emoji-color-fonts`                                      |
+
+Nach der Installation bei Bedarf `fc-cache -fv` ausfuehren. Optional: `noto-fonts` fuer breitere Symbolabdeckung bei minimalen Installationen.
+
+## Desktop-Pakete aus Quellcode bauen
+
+Diese Skripte sind in `package.json` und `Taskfile.yml` definiert.
+
+### Linux x64 AppImage + DEB
+
+```bash
+pnpm run dist:linux-x64
+```
+
+### Linux arm64 AppImage + DEB
+
+```bash
+pnpm run dist:linux-arm64
+```
+
+### RPM
+
+```bash
+pnpm run dist:rpm
+```
+
+Oder ueber Task:
+
+```bash
+task dist:fe:rpm
+```
+
+## Container-Build (Wheel, AppImage, deb, rpm)
+
+`Dockerfile.build` fuehrt die gleichen Schritte wie die CI aus (Poetry, pnpm, `task`, APT-Paketabhaengigkeiten). Ausgelegt auf **linux/amd64** (NodeSource amd64, Task amd64). Standardziel ist alles; per Build-Arg ueberschreibbar.
+
+Werte fuer `MESHCHATX_BUILD_TARGETS`: `all` (Standard), `wheel` oder `electron` (AppImage + deb fuer x64 und arm64, RPM best-effort, kein wheel).
+
+Build:
+
+```bash
+docker build -f Dockerfile.build -t meshchatx-build:local .
+```
+
+Nur Wheel:
+
+```bash
+docker build -f Dockerfile.build --build-arg MESHCHATX_BUILD_TARGETS=wheel -t meshchatx-build:wheel .
+```
+
+`/artifacts` aus dem fertigen Image auf den Host kopieren:
+
+```bash
+cid=$(docker create meshchatx-build:local)
+docker cp "${cid}:/artifacts" ./meshchatx-artifacts
+docker rm "${cid}"
+```
+
+## Architekturunterstuetzung
+
+- Docker-Image: `amd64`, `arm64`
+- Linux AppImage: `x64`, `arm64`
+- Linux DEB: `x64`, `arm64`
+- Windows: `x64`, `arm64` (Build-Skripte vorhanden)
+- macOS: Build-Skripte vorhanden (`arm64`, `universal`) fuer lokale Build-Umgebungen
+- Android: nur Universal-APK (siehe [`android/README.md`](../android/README.md))
+
+## Android
+
+MeshChatX unterstuetzt native Android-APK-Builds (nicht nur Termux).
+
+### APKs aus Quellcode bauen
+
+Vom Repository-Root:
+
+```bash
+# 1) Chaquopy-Wheels gemaess android/app/build.gradle bauen
+bash scripts/build-android-wheels-local.sh
+
+# 2) Universal-APK bauen (ein Debug + ein Release pro Lauf; siehe android/README.md)
+cd android
+./gradlew --no-daemon :app:assembleDebug :app:assembleRelease
+```
+
+**Eine** Android-Variante. Gradle synchronisiert den gesamten `meshchatx/`-Ordner nach `app/src/main/python/meshchatx/`, inklusive Offline-Repository-Raeder. Dokumentierte und veroeffentlichte Builds nutzen ausschliesslich **Universal**-Packaging: je ein Debug- und ein Release-APK pro Lauf, mit allen in `android/app/build.gradle` gewaehlten nativen ABIs.
+
+- Debug: `android/app/build/outputs/apk/debug/app-debug.apk`
+- Release: `android/app/build/outputs/apk/release/app-release-unsigned.apk`
+
+Hinweise:
+
+- Release-Builds sind standardmaessig unsigniert, bis die Signatur konfiguriert ist (`scripts/sign-android-apks.sh`).
+- Die im Universal-APK enthaltenen nativen ABIs folgen `android/app/build.gradle` (einschliesslich `armeabi-v7a`, falls aktiviert). Das Bauen von Radern fuer `armeabi-v7a` erfordert ein Android-SDK in `ANDROID_HOME` (siehe `android/README.md`).
+- Existiert im Repo-Root `dist/reticulum_meshchatx-*.whl` (z. B. nach `python -m build --wheel -o dist .`), bevorzugt die Aktualisierung des Offline-Repositorys dieses Wheel gegueber PyPI. In der CI wird das Wheel vor dem Android-Gradle-Schritt gebaut.
+
+Weitere Dokumentation:
+
+- [`docs/meshchatx_on_android_with_termux.md`](../docs/meshchatx_on_android_with_termux.md)
+- [`android/README.md`](../android/README.md)
+
+## Konfiguration
+
+| Argument                   | Umgebungsvariable                        | Standard     | Beschreibung                                                                                                                                                                                 |
+| -------------------------- | ---------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--host`                   | `MESHCHAT_HOST`                          | `127.0.0.1`  | Webserver-Bind-Adresse                                                                                                                                                                       |
+| `--port`                   | `MESHCHAT_PORT`                          | `8000`       | Webserver-Port                                                                                                                                                                               |
+| `--no-https`               | `MESHCHAT_NO_HTTPS`                      | `false`      | HTTPS deaktivieren                                                                                                                                                                           |
+| `--ssl-cert` / `--ssl-key` | `MESHCHAT_SSL_CERT` / `MESHCHAT_SSL_KEY` | (keine)      | PEM-Zertifikat und Schluessel; beide setzen. Ueberschreibt automatisch erzeugte Zertifikate unter der Identitaet im Verzeichnis `ssl/`.                                                      |
+| `--rns-log-level`          | `MESHCHAT_RNS_LOG_LEVEL`                 | (keine)      | Reticulum (RNS) Log-Level: `none`, `critical`, `error`, `warning`, `notice`, `verbose`, `debug`, `extreme` oder numerisch. CLI ueberschreibt die Umgebungsvariable, wenn beide gesetzt sind. |
+| `--headless`               | `MESHCHAT_HEADLESS`                      | `false`      | Browser nicht automatisch oeffnen                                                                                                                                                            |
+| `--auth`                   | `MESHCHAT_AUTH`                          | `false`      | Basis-Authentifizierung aktivieren                                                                                                                                                           |
+| `--reset-password`         | `MESHCHAT_RESET_PASSWORD`                | `false`      | Gespeicherten Passwort-Hash loeschen, damit ein neues Passwort ueber die Web-Oberflaeche gesetzt werden kann                                                                                 |
+| `--storage-dir`            | `MESHCHAT_STORAGE_DIR`                   | `./storage`  | Datenverzeichnis                                                                                                                                                                             |
+| `--public-dir`             | `MESHCHAT_PUBLIC_DIR`                    | auto/bundled | Frontend-Verzeichnis (fuer Quell-Installationen ohne gebundelte Assets)                                                                                                                      |
+
+## Branches
+
+| Branch   | Zweck                                                                          |
+| -------- | ------------------------------------------------------------------------------ |
+| `master` | Stabile Releases. Nur produktionsreifer Code.                                  |
+| `dev`    | Aktive Entwicklung. Kann instabile oder unvollstaendige Aenderungen enthalten. |
+
+## Entwicklung
+
+Gaengige Aufgaben aus `Taskfile.yml`:
+
+```bash
+task install
+task lint:all
+task test:all
+task build:all
+```
+
+`Makefile`-Kurzformen:
+
+| Befehl         | Beschreibung                                  |
+| -------------- | --------------------------------------------- |
+| `make install` | pnpm- und Poetry-Abhaengigkeiten installieren |
+| `make run`     | MeshChatX ueber Poetry starten                |
+| `make build`   | Frontend bauen                                |
+| `make lint`    | eslint und ruff ausfuehren                    |
+| `make test`    | Frontend- und Backend-Tests                   |
+| `make clean`   | Build-Artefakte und node_modules entfernen    |
+
+## Versionierung
+
+Aktuelle Version in diesem Repository: `4.7.1`.
+
+- Fuer Release-Bumps bearbeiten Sie **nur** `version` in **`package.json`**.
+- **`pnpm run version:sync`** (wird auch zu Beginn von **`pnpm run build`** ausgefuehrt) verbreitet diese Version in **`pyproject.toml`**, **`meshchatx/src/version.py`**, **`THIRD_PARTY_NOTICES.txt`** (Produktzeile), **README** / **lang/README.\*** (Zeilen mit aktueller Version), **`docs/meshchatx_on_raspberry_pi.md`** (pipx-Beispiel) und Hilfsfelder in **`packaging/arch/PKGBUILD`**.
+- **`meshchatx.__version__`** wird aus **`meshchatx/src/version.py`** gelesen, ohne `meshchatx.src` zu importieren, damit ein normales `import meshchatx` leicht bleibt.
+- **Changelog**-Eintrage bleiben beim Release manuell.
+
+## Sicherheit
+
+- [`SECURITY.md`](../SECURITY.md)
+- [`LEGAL.md`](../LEGAL.md)
+- Eingebaute Integritaetspruefungen und HTTPS/WSS-Standardwerte in der App-Laufzeit.
+- CI- und Release-Builds in GitHub Actions.
+
+## Sprache hinzufuegen
+
+Arbeitsablauf des Autors: ArgosTranslate, dann lokales LLM (Qwen 3 + Gemma 4).
+
+Korrekturen von der Community sind willkommen, per LXMF oder wo Sie erreichbar sind.
+
+Die Locale-Erkennung erfolgt automatisch. Fuegen Sie Dateien unter `meshchatx/src/frontend/locales/` hinzu (z. B. `xx.json`) mit denselben Schluesseln wie `en.json` und oberstes `_languageName` fuer die Sprachauswahl. Sie koennen `en.json` kopieren und alles manuell uebersetzen; **maschinenunterstuetzte Erzeugung (optional)** ist niemals erforderlich.
+
+**Optional: Argos-Translate-Start:** fuer einen Entwurf aus `en.json` koennen Sie `scripts/argos_translate.py` nutzen; es behandelt Formatierung, farbige Ausgabe und schuetzt z. B. `{count}`.
+
+```bash
+# argostranslate ggf. installieren
+pipx install argostranslate
+
+# Uebersetzungsskript ausfuehren
+python scripts/argos_translate.py --from en --to xx --input meshchatx/src/frontend/locales/en.json --output meshchatx/src/frontend/locales/xx.json --name "Ihr Sprachname"
+```
+
+Nach jeder maschinellen Runde Grammatik, Kontext und Ton (formell vs. informell) mit LLM oder Mensch pruefen.
+
+`pnpm test -- tests/frontend/i18n.test.js --run` prueft die Schluesselparitaet mit `en.json`.
+
+Keine weiteren Code-Aenderungen noetig. App, Sprachwahl und Tests lesen Locales zur Build-Zeit aus `meshchatx/src/frontend/locales/`.
+
+## Spenden
+
+Spenden sind freiwillig. Sie helfen, Zeit und Aufwand fuer die Entwicklung dieser App zu finanzieren.
+
+**Moeglichkeiten:** [`donate.md`](../donate.md) (Monero, Ko-Fi, Buy Me a Coffee).
+
+## Mitwirkende
+
+- [Liam Cottle](https://github.com/liamcottle) - Originales Reticulum MeshChat
+- [RFnexus](https://github.com/RFnexus) - micron-Parser (JavaScript)
+- [markqvist](https://github.com/markqvist) - Reticulum, LXMF, LXST
+
+## Lizenz
+
+Die projekt-eigenen Anteile stehen unter 0BSD.
+Urspruengliche Upstream-Anteile von Reticulum MeshChat bleiben unter MIT.
+Vollstaendiger Text und Hinweise in [`../LICENSE`](../LICENSE).

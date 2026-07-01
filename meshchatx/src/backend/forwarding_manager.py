@@ -1,0 +1,165 @@
+# SPDX-License-Identifier: 0BSD
+
+import base64
+import contextlib
+import os
+
+import RNS
+
+from .database import Database
+from .meshchat_utils import create_lxmf_router
+
+
+class ForwardingManager:
+    def __init__(self, db: Database, storage_path: str, delivery_callback, config=None):
+        self.db = db
+        self.storage_path = storage_path
+        self.delivery_callback = delivery_callback
+        self.config = config
+        self.forwarding_destinations = {}
+        self.forwarding_routers = {}
+
+    def load_aliases(self):
+        mappings = self.db.messages.get_all_forwarding_mappings()
+        for mapping in mappings:
+            try:
+                private_key_bytes = base64.b64decode(
+                    mapping["alias_identity_private_key"],
+                )
+                alias_identity = RNS.Identity.from_bytes(private_key_bytes)
+                alias_hash = mapping["alias_hash"]
+
+                # create temp router for this alias
+                router_storage_path = os.path.join(
+                    self.storage_path,
+                    "forwarding",
+                    alias_hash,
+                )
+                os.makedirs(router_storage_path, exist_ok=True)
+
+                router = create_lxmf_router(
+                    identity=alias_identity,
+                    storagepath=router_storage_path,
+                )
+                router.PROCESSING_INTERVAL = 1
+                if self.config:
+                    router.delivery_per_transfer_limit = (
+                        self.config.lxmf_delivery_transfer_limit_in_bytes.get() / 1000
+                    )
+
+                router.register_delivery_callback(self.delivery_callback)
+
+                alias_destination = router.register_delivery_identity(
+                    identity=alias_identity,
+                )
+
+                self.forwarding_destinations[alias_hash] = alias_destination
+                self.forwarding_routers[alias_hash] = router
+
+            except Exception as e:
+                print(f"Failed to load forwarding alias {mapping['alias_hash']}: {e}")
+
+    def get_or_create_mapping(
+        self,
+        source_hash,
+        final_recipient_hash,
+        original_destination_hash,
+    ):
+        mapping = self.db.messages.get_forwarding_mapping(
+            original_sender_hash=source_hash,
+            final_recipient_hash=final_recipient_hash,
+        )
+
+        if not mapping:
+            alias_identity = RNS.Identity()
+            alias_hash = alias_identity.hash.hex()
+
+            # create temp router for this alias
+            router_storage_path = os.path.join(
+                self.storage_path,
+                "forwarding",
+                alias_hash,
+            )
+            os.makedirs(router_storage_path, exist_ok=True)
+
+            router = create_lxmf_router(
+                identity=alias_identity,
+                storagepath=router_storage_path,
+            )
+            router.PROCESSING_INTERVAL = 1
+            if self.config:
+                router.delivery_per_transfer_limit = (
+                    self.config.lxmf_delivery_transfer_limit_in_bytes.get() / 1000
+                )
+
+            router.register_delivery_callback(self.delivery_callback)
+
+            alias_destination = router.register_delivery_identity(
+                identity=alias_identity,
+            )
+
+            self.forwarding_destinations[alias_hash] = alias_destination
+            self.forwarding_routers[alias_hash] = router
+
+            data = {
+                "alias_identity_private_key": base64.b64encode(
+                    alias_identity.get_private_key(),
+                ).decode(),
+                "alias_hash": alias_hash,
+                "original_sender_hash": source_hash,
+                "final_recipient_hash": final_recipient_hash,
+                "original_destination_hash": original_destination_hash,
+            }
+            self.db.messages.create_forwarding_mapping(data)
+            return data
+        return mapping
+
+    def announce_aliases(self):
+        for alias_hash in self.forwarding_destinations:
+            destination = self.forwarding_destinations[alias_hash]
+            destination.announce()
+
+    def teardown(self):
+        """Stop alias LXMF routers and deregister their RNS destinations."""
+        for alias_hash, router in list(self.forwarding_routers.items()):
+            try:
+                if hasattr(router, "register_delivery_callback"):
+                    with contextlib.suppress(Exception):
+                        router.register_delivery_callback(None)
+                if hasattr(router, "delivery_destinations"):
+                    for dest_hash in list(router.delivery_destinations.keys()):
+                        dest = router.delivery_destinations[dest_hash]
+                        with contextlib.suppress(Exception):
+                            RNS.Transport.deregister_destination(dest)
+                if getattr(router, "propagation_destination", None):
+                    with contextlib.suppress(Exception):
+                        RNS.Transport.deregister_destination(
+                            router.propagation_destination,
+                        )
+            except Exception as e:
+                print(f"Error deregistering forwarding destinations {alias_hash}: {e}")
+            try:
+                if hasattr(router, "identity") and router.identity:
+                    ih = router.identity.hash
+                    for link in list(RNS.Transport.active_links):
+                        match = False
+                        if hasattr(link, "destination") and link.destination:
+                            if (
+                                hasattr(link.destination, "identity")
+                                and link.destination.identity
+                            ):
+                                if link.destination.identity.hash == ih:
+                                    match = True
+                        if match:
+                            with contextlib.suppress(Exception):
+                                link.teardown()
+            except Exception as e:
+                print(f"Error cleaning forwarding links {alias_hash}: {e}")
+            try:
+                router.jobs = lambda: None
+                if hasattr(router, "exit_handler"):
+                    router.exit_handler()
+            except Exception as e:
+                print(f"Error stopping forwarding LXMF router {alias_hash}: {e}")
+        self.forwarding_destinations.clear()
+        self.forwarding_routers.clear()

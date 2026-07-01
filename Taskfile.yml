@@ -1,0 +1,522 @@
+version: "3"
+
+vars:
+    PYTHON:
+        sh: echo "${PYTHON:-python}"
+    NPM:
+        sh: echo "${NPM:-pnpm}"
+    NPM_INSTALL_FLAGS:
+        sh: 'if [ "${MESHCHATX_OFFLINE_BUILD}" = "1" ]; then echo "--offline"; else echo ""; fi'
+    UV_SYNC_FLAGS:
+        sh: 'if [ "${MESHCHATX_OFFLINE_BUILD}" = "1" ]; then echo "--offline"; else echo ""; fi'
+    LEGACY_ELECTRON_VERSION:
+        sh: echo "${LEGACY_ELECTRON_VERSION:-30.0.8}"
+    WINE_PYTHON:
+        sh: echo "${WINE_PYTHON:-wine C:/Python314/python.exe}"
+    DOCKER_COMPOSE_CMD:
+        sh: echo "${DOCKER_COMPOSE_CMD:-docker compose}"
+    DOCKER_COMPOSE_FILE:
+        sh: echo "${DOCKER_COMPOSE_FILE:-docker-compose.yml}"
+    DOCKER_IMAGE:
+        sh: echo "${DOCKER_IMAGE:-reticulum-meshchatx:local}"
+    DOCKER_BUILDER:
+        sh: echo "${DOCKER_BUILDER:-meshchatx-builder}"
+    DOCKER_PLATFORMS:
+        sh: echo "${DOCKER_PLATFORMS:-linux/amd64}"
+    DOCKER_BUILD_FLAGS:
+        sh: echo "${DOCKER_BUILD_FLAGS:---load}"
+    DOCKER_BUILD_ARGS:
+        sh: echo "${DOCKER_BUILD_ARGS:-}"
+    DOCKER_CONTEXT:
+        sh: echo "${DOCKER_CONTEXT:-.}"
+    DOCKERFILE:
+        sh: echo "${DOCKERFILE:-Dockerfile}"
+    DOCKER_BUILD_IMAGE:
+        sh: echo "${DOCKER_BUILD_IMAGE:-reticulum-meshchatx-build:local}"
+    DOCKER_BUILD_FILE:
+        sh: echo "${DOCKER_BUILD_FILE:-Dockerfile.build}"
+    ANDROID_DIR:
+        sh: echo "${ANDROID_DIR:-android}"
+    PYTHON_SRC_DIR:
+        sh: echo "${PYTHON_SRC_DIR:-${ANDROID_DIR}/app/src/main/python}"
+    JNI_LIBS_DIR:
+        sh: echo "${JNI_LIBS_DIR:-${ANDROID_DIR}/app/src/main/jniLibs}"
+    RETICULUM_RNS_SRC:
+        sh: echo "${RETICULUM_RNS_SRC:-./misc/RNS}"
+    RETICULUM_LXMF_SRC:
+        sh: echo "${RETICULUM_LXMF_SRC:-./misc/LXMF}"
+    RETICULUM_LXST_SRC:
+        sh: echo "${RETICULUM_LXST_SRC:-./misc/LXST}"
+    SIDEBAND_CODEC2_WHL:
+        sh: echo "${SIDEBAND_CODEC2_WHL:-./misc/pycodec2-3.0.1-cp311-cp311-linux_aarch64.whl}"
+    SIDEBAND_LIB_ARM64:
+        sh: echo "${SIDEBAND_LIB_ARM64:-./misc/libcodec2-arm64-v8a.so}"
+    SIDEBAND_LIB_ARMEABI:
+        sh: echo "${SIDEBAND_LIB_ARMEABI:-./misc/libcodec2-armeabi-v7a.so}"
+
+tasks:
+    default:
+        desc: Show available tasks
+        cmds:
+            - task --list
+
+    # --- Initialization & Dependencies ---
+
+    install:
+        desc: Install all dependencies (frontend and backend)
+        deps: [deps:fe, deps:be]
+
+    install:offline:
+        desc: Install from offline bundle (air-gapped machine)
+        cmds:
+            - bash scripts/install-offline.sh
+
+    bundle:offline:
+        desc: Create offline bundle for air-gapped builds (online machine only)
+        cmds:
+            - bash scripts/create-offline-bundle.sh
+
+    setup:wine:
+        desc: Setup Wine environment for Windows cross-builds
+        cmds:
+            - ./scripts/setup_wine_env.sh
+
+    deps:fe:
+        desc: Install Node.js dependencies
+        cmds:
+            - '{{.NPM}} install{{if ne .NPM_INSTALL_FLAGS ""}} {{.NPM_INSTALL_FLAGS}}{{end}}'
+
+    deps:be:
+        desc: Install Python dependencies using UV
+        cmds:
+            - 'uv sync --group dev{{if ne .UV_SYNC_FLAGS ""}} {{.UV_SYNC_FLAGS}}{{end}}'
+            - uv run python scripts/patch_lxst_pyogg_ogg_ctypes.py
+
+    setup:be:
+        desc: Full backend environment setup
+        cmds:
+            - 'uv sync --group dev{{if ne .UV_SYNC_FLAGS ""}} {{.UV_SYNC_FLAGS}}{{end}}'
+            - uv run python scripts/patch_lxst_pyogg_ogg_ctypes.py
+            - uv run pip install ruff
+
+    # --- Execution ---
+
+    run:
+        desc: Run the application
+        deps: [install]
+        cmds:
+            - uv run python -m meshchatx.meshchat
+
+    dev:
+        desc: Run in development mode (builds frontend first)
+        deps: [build:fe]
+        cmds:
+            - task: run
+
+    start:
+        desc: Run the application via Electron Forge
+        cmds:
+            - "{{.NPM}} run start"
+
+    package:
+        desc: Package the application with Electron Forge
+        cmds:
+            - "{{.NPM}} run package"
+
+    make:
+        desc: Generate distributables with Electron Forge
+        cmds:
+            - "{{.NPM}} run make"
+
+    # --- Code Quality ---
+
+    lint:
+        desc: Run all linters
+        deps: [lint:fe, lint:be]
+
+    lint:all:
+        desc: Run all linters
+        deps: [lint:fe, lint:be]
+
+    lint:be:
+        desc: Lint Python code (ruff)
+        cmds:
+            - uv run ruff check .
+            - uv run ruff format --check .
+
+    lint:fe:
+        desc: Lint frontend code
+        cmds:
+            - "{{.NPM}} run lint"
+
+    fmt:all:
+        desc: Format all code
+        deps: [fmt:fe, fmt:be]
+
+    fmt:be:
+        desc: Format Python code (ruff)
+        cmds:
+            - uv run ruff format ./ --exclude tests
+            - uv run ruff check --fix ./ --exclude tests
+
+    fmt:fe:
+        desc: Format frontend code (Prettier/ESLint)
+        cmds:
+            - "{{.NPM}} run format"
+            - "{{.NPM}} run lint:fix"
+
+    # --- Testing & Analysis ---
+
+    test:all:
+        desc: Run all tests
+        deps: [test:be, test:fe, test:lang]
+
+    test:e2e:
+        desc: Playwright E2E (starts MeshChat backend + Vite; requires uv, curl, pnpm exec playwright install chromium)
+        cmds:
+            - "{{.NPM}} run test:e2e"
+
+    test:be:
+        desc: Run Python tests (pytest; includes perf/memory profiling — same as GitHub CI)
+        cmds:
+            - uv run pytest tests/backend -n auto --cov=meshchatx/src/backend
+
+    test:be:cov:
+        desc: Run Python tests with detailed coverage (includes performance and memory profiling tests)
+        cmds:
+            - uv run pytest tests/backend -n auto --cov=meshchatx/src/backend --cov-report=term-missing
+
+    test:be:perf:
+        desc: Backend performance regression tests only (hot paths + bottlenecks)
+        cmds:
+            - uv run pytest tests/backend/test_performance_hotpaths.py tests/backend/test_performance_bottlenecks.py
+
+    test:be:full:
+        desc: Same as test:be (full backend suite)
+        cmds:
+            - uv run pytest tests/backend -n auto --cov=meshchatx/src/backend
+
+    test:mutation:
+        desc: Mutation testing (mutmut; slow; optional; default targets meshchat_utils)
+        cmds:
+            - uv run mutmut run "meshchatx.src.backend.meshchat_utils*"
+
+    test:fe:
+        desc: Run frontend + Electron shell unit tests (vitest; excludes i18n — see test:lang; excludes LoadTimePerformance — use test:fe:loadtime locally)
+        cmds:
+            - "{{.NPM}} exec vitest run --exclude tests/frontend/LoadTimePerformance.test.js --exclude tests/frontend/i18n.test.js"
+            - "{{.NPM}} exec vitest run --config vitest.electron.config.js"
+
+    test:fe:loadtime:
+        desc: Optional frontend load-time / sidebar performance tests (not run in CI)
+        cmds:
+            - "{{.NPM}} run test:loadtime"
+
+    test:be:media-fuzz:
+        desc: Hypothesis fuzz tests for stickers, TGS/Lottie JSON, WebM, GIFs, pack exports
+        cmds:
+            - uv run pytest tests/backend/test_media_fuzzing.py -q
+
+    test:be:media-http:
+        desc: aiohttp integration tests for /api/v1/stickers, sticker-packs, and /api/v1/gifs
+        cmds:
+            - uv run pytest tests/backend/test_media_http_api.py -q
+
+    test:fuzz:all:
+        desc: Vitest fuzzing tag plus backend media Hypothesis fuzz
+        deps: [test:be:media-fuzz]
+        cmds:
+            - "{{.NPM}} run test:fuzz"
+
+    test:fe:cov:
+        desc: Run frontend tests with line coverage (Vitest v8)
+        cmds:
+            - "{{.NPM}} run test:coverage"
+
+    test:lang:
+        desc: Run localization tests
+        cmds:
+            - "{{.NPM}} exec vitest run tests/frontend/i18n.test.js"
+            - "uv run pytest tests/backend/test_translator_handler.py"
+
+    test:integrity:
+        desc: Run data integrity tests
+        cmds:
+            - uv run pytest tests/backend/test_integrity.py tests/backend/test_backend_integrity.py
+
+    test:cov:
+        desc: Run all tests with coverage (Python + frontend JS/Vue + translator pytest)
+        deps: [test:be:cov, test:fe:cov]
+        cmds:
+            - "uv run pytest tests/backend/test_translator_handler.py"
+
+    bench:
+        desc: Default benchmark run (backend comprehensive suite; same as bench:be)
+        cmds:
+            - task: bench:be
+
+    bench:be:
+        desc: Run backend benchmarks
+        cmds:
+            - uv run python tests/backend/run_comprehensive_benchmarks.py
+
+    bench:be:extreme:
+        desc: Run extreme stress benchmarks
+        cmds:
+            - uv run python tests/backend/run_comprehensive_benchmarks.py --extreme
+
+    profile:mem:
+        desc: Run memory profiling
+        cmds:
+            - uv run pytest tests/backend/test_memory_profiling.py
+
+    check:
+        desc: Run formatting, linting, and testing sequentially
+        cmds:
+            - task: fmt:all
+            - task: lint:all
+            - task: test:all
+
+    compile:
+        desc: Compile Python to check for syntax errors
+        cmds:
+            - "{{.PYTHON}} -m compileall meshchatx/"
+
+    # --- Build & Packaging ---
+
+    build:all:
+        desc: Build frontend and prepare backend
+        deps: [install]
+        cmds:
+            - "{{.NPM}} run build"
+
+    build:fe:
+        desc: Build frontend assets
+        deps: [deps:fe]
+        cmds:
+            - "{{.NPM}} run build-frontend"
+
+    build:wheel:
+        desc: Build Python wheel package
+        deps: [install]
+        cmds:
+            - uv build --wheel
+            - "{{.PYTHON}} scripts/move_wheels.py"
+
+    # --- Electron Distribution ---
+
+    dist:linux:appimage:
+        desc: Build Linux AppImage (x64 + arm64 only)
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run electron-postinstall"
+            - "PLATFORM=linux ARCH=x64 {{.NPM}} run build-backend"
+            - "pnpm exec electron-builder --linux AppImage --x64 --publish=never"
+            - "PLATFORM=linux ARCH=arm64 {{.NPM}} run build-backend"
+            - "pnpm exec electron-builder --linux AppImage --arm64 --publish=never"
+
+    dist:linux:arm64:
+        desc: Build Linux arm64 AppImage
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run electron-postinstall"
+            - "PLATFORM=linux ARCH=arm64 {{.NPM}} run build-backend"
+            - "{{.NPM}} run dist -- --linux AppImage --arm64"
+
+    dist:win:exe:
+        desc: Build Windows portable EXE
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run electron-postinstall"
+            - "PLATFORM=win32 {{.NPM}} run build-backend"
+            - "{{.NPM}} run dist -- --win portable"
+
+    dist:win:arm64:
+        desc: Build Windows arm64 portable EXE
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run electron-postinstall"
+            - "PLATFORM=win32 ARCH=arm64 {{.NPM}} run build-backend"
+            - "{{.NPM}} run dist -- --win portable --arm64"
+
+    dist:win:wine:
+        desc: Build Windows EXE/Installer via Wine
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run electron-postinstall"
+            - "PLATFORM=win32 PYTHON_CMD='{{.WINE_PYTHON}}' {{.NPM}} run build-backend"
+            - "npx electron-builder --win portable nsis --publish=never"
+
+    dist:fe:linux:
+        desc: Build Linux Electron app (prebuilt backend)
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run dist:linux"
+
+    dist:fe:rpm:
+        desc: Build RPM package
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run dist:rpm"
+
+    dist:fe:flatpak:
+        desc: Build Flatpak package
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run dist:flatpak"
+
+    dist:fe:win:
+        desc: Build Windows Electron apps
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run dist:windows"
+
+    dist:fe:zip:
+        desc: Build Electron ZIP (Linux)
+        deps: [build:fe]
+        cmds:
+            - "PLATFORM=linux {{.NPM}} run build-backend"
+            - "{{.NPM}} run dist:zip"
+
+    dist:all:
+        desc: Build all Electron apps (Linux + Win)
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run electron-postinstall"
+            - "PLATFORM=linux {{.NPM}} run build-backend"
+            - "PLATFORM=win32 {{.NPM}} run build-backend"
+            - "{{.NPM}} run dist -- --linux AppImage deb --win portable nsis"
+
+    dist:all:wine:
+        desc: Build all Electron apps (Linux + Win via Wine)
+        deps: [build:fe]
+        cmds:
+            - "{{.NPM}} run electron-postinstall"
+            - "PLATFORM=linux {{.NPM}} run build-backend"
+            - "PLATFORM=win32 PYTHON_CMD='{{.WINE_PYTHON}}' {{.NPM}} run build-backend"
+            - "npx electron-builder --linux AppImage deb --win portable nsis --publish=never"
+
+    # --- Docker ---
+
+    docker:build:
+        desc: Build Docker image (buildx)
+        cmds:
+            - |
+                if ! docker buildx inspect {{.DOCKER_BUILDER}} >/dev/null 2>&1; then
+                  docker buildx create --name {{.DOCKER_BUILDER}} --use >/dev/null
+                else
+                  docker buildx use {{.DOCKER_BUILDER}}
+                fi
+            - |
+                docker buildx build --builder {{.DOCKER_BUILDER}} --platform {{.DOCKER_PLATFORMS}} \
+                  {{.DOCKER_BUILD_FLAGS}} \
+                  -t {{.DOCKER_IMAGE}} \
+                  {{.DOCKER_BUILD_ARGS}} \
+                  -f {{.DOCKERFILE}} \
+                  {{.DOCKER_CONTEXT}}
+
+    docker:run:
+        desc: Run Docker container (compose)
+        cmds:
+            - 'MESHCHAT_IMAGE="{{.DOCKER_IMAGE}}" {{.DOCKER_COMPOSE_CMD}} -f {{.DOCKER_COMPOSE_FILE}} up --remove-orphans --pull never reticulum-meshchatx'
+
+    docker:run:dev:
+        desc: Run Docker container (dev compose)
+        cmds:
+            - 'MESHCHAT_IMAGE="{{.DOCKER_IMAGE}}" {{.DOCKER_COMPOSE_CMD}} -f docker-compose.dev.yml up --build --remove-orphans reticulum-meshchatx'
+
+    docker:build:env:
+        desc: Build containerized build environment
+        cmds:
+            - docker build -t {{.DOCKER_BUILD_IMAGE}} -f {{.DOCKER_BUILD_FILE}} .
+
+    docker:build:artifacts:
+        desc: Build and export artifacts from container
+        cmds:
+            - docker rm -f meshchat-build-temp || true
+            - docker run --name meshchat-build-temp {{.DOCKER_BUILD_IMAGE}}
+            - mkdir -p dist python-dist
+            - docker cp meshchat-build-temp:/app/dist/. ./dist/
+            - docker cp meshchat-build-temp:/app/python-dist/. ./python-dist/
+            - docker rm meshchat-build-temp
+
+    # --- Android ---
+
+    android:init:
+        desc: Initialize Gradle wrapper
+        cmds:
+            - |
+                if [ ! -f "{{.ANDROID_DIR}}/gradle/wrapper/gradle-wrapper.jar" ]; then
+                    echo "Downloading Gradle wrapper jar..."
+                    mkdir -p "{{.ANDROID_DIR}}/gradle/wrapper"
+                    curl -L -o "{{.ANDROID_DIR}}/gradle/wrapper/gradle-wrapper.jar" \
+                        https://raw.githubusercontent.com/gradle/gradle/v8.12.1/gradle/wrapper/gradle-wrapper.jar || \
+                        echo "Failed to download. Please run: cd {{.ANDROID_DIR}} && gradle wrapper --gradle-version 8.12.1"
+                else
+                    echo "Gradle wrapper already initialized."
+                fi
+
+    android:prepare:
+        desc: Prepare Android source assets
+        deps: [build:fe, android:init]
+        cmds:
+            - |
+                echo "Preparing Android assets..."
+                mkdir -p "{{.PYTHON_SRC_DIR}}"
+                rm -rf "{{.PYTHON_SRC_DIR}}/meshchatx"
+                echo "MeshChatX Python tree is synced by Gradle into app/src/main/python/meshchatx (see android/app/build.gradle)."
+
+    android:wheels:
+        desc: Build the Android (Chaquopy) wheels into android/vendor/. Mirrors CI.
+        vars:
+            ANDROID_WHEEL_PYTHON: '{{.ANDROID_WHEEL_PYTHON | default "3.11"}}'
+            ANDROID_WHEEL_ABIS: '{{.ANDROID_WHEEL_ABIS | default "arm64-v8a,x86_64,armeabi-v7a"}}'
+            ANDROID_WHEEL_CHAQUOPY_REF: '{{.ANDROID_WHEEL_CHAQUOPY_REF | default "9f563f45108a873d7feb363e1f754c0173f1114e"}}'
+        cmds:
+            - |
+                bash scripts/build-android-wheels-local.sh \
+                    --python-minor "{{.ANDROID_WHEEL_PYTHON}}" \
+                    --chaquopy-ref "{{.ANDROID_WHEEL_CHAQUOPY_REF}}" \
+                    --abis "{{.ANDROID_WHEEL_ABIS}}"
+
+    android:build:
+        desc: Build Debug APK (universal ABI packaging; arm64-v8a only unless overridden)
+        deps: [android:prepare]
+        vars:
+            MESHCHATX_ABIS: '{{.MESHCHATX_ABIS | default "arm64-v8a"}}'
+            MESHCHATX_ABI_PACKAGING: '{{.MESHCHATX_ABI_PACKAGING | default "universal"}}'
+        cmds:
+            - cd "{{.ANDROID_DIR}}" && ./gradlew :app:assembleDebug -PmeshchatxAbis={{.MESHCHATX_ABIS}} -PmeshchatxAbiPackaging={{.MESHCHATX_ABI_PACKAGING}}
+
+    android:build:release:
+        desc: Build Release APK (same ABI defaults as android:build unless overridden)
+        deps: [android:prepare]
+        vars:
+            MESHCHATX_ABIS: '{{.MESHCHATX_ABIS | default "arm64-v8a"}}'
+            MESHCHATX_ABI_PACKAGING: '{{.MESHCHATX_ABI_PACKAGING | default "universal"}}'
+        cmds:
+            - cd "{{.ANDROID_DIR}}" && ./gradlew :app:assembleRelease -PmeshchatxAbis={{.MESHCHATX_ABIS}} -PmeshchatxAbiPackaging={{.MESHCHATX_ABI_PACKAGING}}
+
+    android:clean:
+        desc: Clean Android artifacts
+        cmds:
+            - cd "{{.ANDROID_DIR}}" && ./gradlew clean
+            - rm -rf "{{.PYTHON_SRC_DIR}}/meshchatx" "{{.ANDROID_DIR}}/app/src/main/python/meshchatx"
+
+    # --- Maintenance ---
+
+    dist:
+        desc: Alias for dist:linux:appimage
+        cmds:
+            - task: dist:linux:appimage
+
+    clean:
+        desc: Nuke all build artifacts and dependencies
+        cmds:
+            - rm -rf node_modules build dist python-dist meshchatx/public build-dir out
+            - task: android:clean
+
+    locales:gen:
+        desc: Generate localization template
+        cmds:
+            - "{{.PYTHON}} scripts/generate_locale_template.py"

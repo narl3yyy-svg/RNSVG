@@ -1,0 +1,14 @@
+graft vendor
+recursive-include meshchatx/public *
+recursive-exclude meshchatx/public/repository-server-bundled *
+recursive-include meshchatx/src/backend *
+include meshchatx/src/version.py
+include meshchatx/src/__init__.py
+include meshchatx/meshchat.py
+include meshchatx/__init__.py
+
+exclude meshchatx/src/frontend
+recursive-exclude meshchatx/src/frontend *
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+

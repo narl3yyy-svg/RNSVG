@@ -1,0 +1,227 @@
+# SPDX-License-Identifier: 0BSD
+
+from datetime import UTC, datetime
+
+from .provider import DatabaseProvider
+
+
+class AnnounceDAO:
+    def __init__(self, provider: DatabaseProvider):
+        self.provider = provider
+
+    def upsert_announce(self, data):
+        if not isinstance(data, dict):
+            data = dict(data)
+
+        fields = [
+            "destination_hash",
+            "aspect",
+            "identity_hash",
+            "identity_public_key",
+            "app_data",
+            "rssi",
+            "snr",
+            "quality",
+        ]
+        columns = ", ".join(fields)
+        placeholders = ", ".join(["?"] * len(fields))
+
+        update_parts = []
+        for f in fields:
+            if f == "destination_hash":
+                continue
+            if f == "app_data":
+                update_parts.append(
+                    "app_data = COALESCE(EXCLUDED.app_data, announces.app_data)",
+                )
+            else:
+                update_parts.append(f"{f} = EXCLUDED.{f}")
+        update_set = ", ".join(update_parts)
+
+        query = (
+            f"INSERT INTO announces ({columns}, created_at, updated_at) VALUES ({placeholders}, ?, ?) "
+            f"ON CONFLICT(destination_hash) DO UPDATE SET {update_set}, updated_at = EXCLUDED.updated_at"
+        )
+
+        params = [data.get(f) for f in fields]
+        now = datetime.now(UTC)
+        params.append(now)
+        params.append(now)
+        self.provider.execute(query, params)
+
+    def trim_announces_for_aspect(self, aspect, max_rows):
+        """Delete oldest rows for this aspect until at most max_rows remain.
+
+        Announces that correspond to a favourited destination or to a saved
+        contact are considered protected and are never deleted by this trim,
+        even if the total count exceeds ``max_rows``. This prevents purging
+        of announces (and the path/identity context they provide) for
+        favourited NomadNet nodes and for messaging contacts when storage
+        limits are enforced.
+        """
+        if max_rows < 1 or not aspect:
+            return
+        row = self.provider.fetchone(
+            "SELECT COUNT(*) AS c FROM announces WHERE aspect = ?",
+            (aspect,),
+        )
+        count = row["c"] if row else 0
+        excess = count - max_rows
+        if excess <= 0:
+            return
+        self.provider.execute(
+            """
+            DELETE FROM announces WHERE id IN (
+                SELECT a.id FROM announces a
+                WHERE a.aspect = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM favourite_destinations f
+                      WHERE f.destination_hash = a.destination_hash
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM contacts c
+                      WHERE c.remote_identity_hash = a.identity_hash
+                         OR c.lxmf_address = a.destination_hash
+                         OR c.lxst_address = a.destination_hash
+                  )
+                ORDER BY a.updated_at ASC, a.id ASC
+                LIMIT ?
+            )
+            """,
+            (aspect, excess),
+        )
+
+    def get_announces(self, aspect=None):
+        if aspect:
+            return self.provider.fetchall(
+                "SELECT * FROM announces WHERE aspect = ?",
+                (aspect,),
+            )
+        return self.provider.fetchall("SELECT * FROM announces")
+
+    def get_announce_by_hash(self, destination_hash):
+        return self.provider.fetchone(
+            "SELECT * FROM announces WHERE destination_hash = ?",
+            (destination_hash,),
+        )
+
+    def get_announces_by_identity_hash(self, identity_hash):
+        return self.provider.fetchall(
+            "SELECT * FROM announces WHERE identity_hash = ?",
+            (identity_hash,),
+        )
+
+    def get_announce_count_by_aspect(self, aspect):
+        row = self.provider.fetchone(
+            "SELECT COUNT(*) as count FROM announces WHERE aspect = ?",
+            (aspect,),
+        )
+        return row["count"] if row else 0
+
+    def delete_all_announces(self, aspect=None):
+        if aspect:
+            self.provider.execute(
+                "DELETE FROM announces WHERE aspect = ?",
+                (aspect,),
+            )
+        else:
+            self.provider.execute("DELETE FROM announces")
+
+    def get_filtered_announces(
+        self,
+        aspect=None,
+        search_term=None,
+        identity_hash=None,
+        destination_hash=None,
+        limit=2500,
+        offset=0,
+    ):
+        query = "SELECT * FROM announces WHERE 1=1"
+        params = []
+        if aspect:
+            query += " AND aspect = ?"
+            params.append(aspect)
+        if identity_hash:
+            query += " AND identity_hash = ?"
+            params.append(identity_hash)
+        if destination_hash:
+            query += " AND destination_hash = ?"
+            params.append(destination_hash)
+        if search_term:
+            query += " AND (destination_hash LIKE ? OR identity_hash LIKE ?)"
+            like_term = f"%{search_term}%"
+            params.extend([like_term, like_term])
+
+        query += " ORDER BY updated_at DESC"
+
+        if limit:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+        return self.provider.fetchall(query, params)
+
+    # Custom Display Names
+    def upsert_custom_display_name(self, destination_hash, display_name):
+        now = datetime.now(UTC)
+        self.provider.execute(
+            """
+            INSERT INTO custom_destination_display_names (destination_hash, display_name, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(destination_hash) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = EXCLUDED.updated_at
+        """,
+            (destination_hash, display_name, now, now),
+        )
+
+    def get_custom_display_name(self, destination_hash):
+        row = self.provider.fetchone(
+            "SELECT display_name FROM custom_destination_display_names WHERE destination_hash = ?",
+            (destination_hash,),
+        )
+        return row["display_name"] if row else None
+
+    def delete_custom_display_name(self, destination_hash):
+        self.provider.execute(
+            "DELETE FROM custom_destination_display_names WHERE destination_hash = ?",
+            (destination_hash,),
+        )
+
+    # Favourites
+    def upsert_favourite(self, destination_hash, display_name, aspect):
+        now = datetime.now(UTC)
+        self.provider.execute(
+            """
+            INSERT INTO favourite_destinations (destination_hash, display_name, aspect, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(destination_hash) DO UPDATE SET display_name = EXCLUDED.display_name, aspect = EXCLUDED.aspect, updated_at = EXCLUDED.updated_at
+        """,
+            (destination_hash, display_name, aspect, now, now),
+        )
+
+    def get_favourite_by_destination_hash(self, destination_hash):
+        return self.provider.fetchone(
+            "SELECT * FROM favourite_destinations WHERE destination_hash = ?",
+            (destination_hash,),
+        )
+
+    def get_favourites(self, aspect=None):
+        if aspect:
+            return self.provider.fetchall(
+                "SELECT * FROM favourite_destinations WHERE aspect = ?",
+                (aspect,),
+            )
+        return self.provider.fetchall("SELECT * FROM favourite_destinations")
+
+    def delete_favourite(self, destination_hash):
+        self.provider.execute(
+            "DELETE FROM favourite_destinations WHERE destination_hash = ?",
+            (destination_hash,),
+        )
+
+    def delete_all_favourites(self, aspect=None):
+        if aspect:
+            self.provider.execute(
+                "DELETE FROM favourite_destinations WHERE aspect = ?",
+                (aspect,),
+            )
+        else:
+            self.provider.execute("DELETE FROM favourite_destinations")

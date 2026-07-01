@@ -1,0 +1,18 @@
+services:
+    reticulum-meshchatx:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: reticulum-meshchatx
+        image: reticulum-meshchatx:local
+        restart: unless-stopped
+        security_opt:
+            - no-new-privileges:true
+        ports:
+            - 127.0.0.1:8000:8000
+        volumes:
+            - meshchatx-config:/config
+
+volumes:
+    meshchatx-config:
+        name: meshchatx-config

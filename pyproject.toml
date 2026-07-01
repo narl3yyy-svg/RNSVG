@@ -1,0 +1,34 @@
+[project]
+name = "rnsvg"
+version = "0.1.0"
+description = "Reticulum-native communication — MeshChatX UI on raw RNS (no LXMF/LXST)"
+authors = [{ name = "RNSVG Contributors" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["reticulum", "rns", "rnsvg", "mesh", "communication"]
+dependencies = [
+  "aiohttp>=3.14.1",
+  "rns>=1.3.5",
+  "psutil>=7.2.2",
+]
+
+[project.scripts]
+rnsvg = "rnsvg.server:main"
+
+[project.urls]
+Homepage = "https://github.com/narl3yyy-svg/RNSVG"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rnsvg*"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.25.0",
+]

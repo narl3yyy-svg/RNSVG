@@ -1,0 +1,95 @@
+# syntax=docker/dockerfile:1
+# Multi-stage image on Wolfi (Chainguard): Node dev for frontend, Python dev for
+# Poetry/cffi builds, Python dev for runtime so native libs can be installed with
+# apk (the minimal chainguard/python image has no shell or package manager).
+# Wolfi provides the opus package (libopus); Alpine's opusfile split is not present.
+# Glibc runtime uses LXST wheels as published; the musl filterlib bake is not used.
+# Voicemail greeting synthesis is optional without espeak-ng (see voicemail_manager).
+
+ARG NODE_IMAGE=cgr.dev/chainguard/node:latest-dev
+ARG PYTHON_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG PYTHON_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+
+FROM --platform=linux/amd64 ${NODE_IMAGE} AS build-frontend
+USER root
+WORKDIR /src
+RUN apk add --no-cache git python3
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml vite.config.js ./
+COPY patches ./patches
+COPY scripts/fetch-micron-wasm.mjs scripts/fetch-micron-wasm.mjs
+COPY scripts/micron-wasm-resolve-bundled.mjs scripts/micron-wasm-resolve-bundled.mjs
+COPY scripts/micron-parser-go-version.mjs scripts/micron-parser-go-version.mjs
+COPY scripts/build/fetch_reticulum_manual.py scripts/build/fetch_reticulum_manual.py
+COPY meshchatx/src/frontend ./meshchatx/src/frontend
+RUN npm install -g pnpm@11.1.2 && \
+    pnpm config set verify-store-integrity true && \
+    pnpm install --frozen-lockfile && \
+    pnpm run build-frontend && \
+    pnpm run build-docs
+
+FROM ${PYTHON_BUILD_IMAGE} AS builder
+USER root
+WORKDIR /build
+RUN apk add --no-cache build-base git pkgconf openssl-dev libffi-dev linux-headers
+
+RUN pip install --no-cache-dir --upgrade "pip>=26.0" uv setuptools wheel "jaraco.context>=6.1.0"
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install --no-cache-dir --upgrade "pip>=26.0" "setuptools" "jaraco.context>=6.1.0"
+
+COPY pyproject.toml uv.lock README.md CHANGELOG.md ./
+COPY logo ./logo
+COPY vendor ./vendor
+RUN uv sync --no-group dev --no-install-project && \
+    rm -rf /root/.cache/pip /root/.cache/uv
+
+COPY meshchatx ./meshchatx
+COPY scripts/patch_lxst_pyogg_ogg_ctypes.py ./scripts/patch_lxst_pyogg_ogg_ctypes.py
+COPY --from=build-frontend /src/meshchatx/public ./meshchatx/public
+
+RUN pip install --no-cache-dir . && \
+    python scripts/patch_lxst_pyogg_ogg_ctypes.py && \
+    find /opt/venv -type d -name "tests" -exec rm -rf {} + && \
+    find /opt/venv -type d -name "test" -exec rm -rf {} + && \
+    find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + && \
+    python -m compileall -q /opt/venv
+
+FROM ${PYTHON_RUNTIME_IMAGE}
+
+ARG OCI_REVISION=""
+ARG OCI_VERSION=""
+ARG OCI_CREATED=""
+
+USER root
+RUN apk add --no-cache opus libffi shadow && \
+    pip install --no-cache-dir --upgrade "pip>=26.0" "setuptools" "jaraco.context>=6.1.0" && \
+    rm -rf /root/.cache/pip && \
+    groupadd -g 1000 meshchat && \
+    useradd --uid 1000 --gid 1000 --create-home --home-dir /home/meshchat \
+        --shell /sbin/nologin meshchat && \
+    mkdir -p /config && chown meshchat:meshchat /config
+
+COPY --from=builder --chown=meshchat:meshchat /opt/venv /opt/venv
+COPY scripts/docker_entrypoint_chainguard.py /docker-entrypoint.py
+
+LABEL org.opencontainers.image.source="https://github.com/Quad4-Software/MeshChatX"
+LABEL org.opencontainers.image.description="MeshChatX is a all in one Reticulum client."
+LABEL org.opencontainers.image.licenses="MIT AND 0BSD"
+LABEL org.opencontainers.image.authors="Quad4"
+LABEL org.opencontainers.image.revision="${OCI_REVISION}"
+LABEL org.opencontainers.image.version="${OCI_VERSION}"
+LABEL org.opencontainers.image.created="${OCI_CREATED}"
+
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+USER meshchat
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD ["python", "-c", "import ssl, urllib.request; urllib.request.urlopen('https://127.0.0.1:8000/api/v1/status', context=ssl._create_unverified_context())"]
+
+ENTRYPOINT ["/usr/bin/python", "/docker-entrypoint.py"]
+CMD ["/opt/venv/bin/meshchatx", "--host=0.0.0.0", "--reticulum-config-dir=/config/.reticulum", "--storage-dir=/config/.reticulum-meshchatx", "--headless"]

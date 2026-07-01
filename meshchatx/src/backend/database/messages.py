@@ -1,0 +1,759 @@
+# SPDX-License-Identifier: 0BSD
+
+import json
+from datetime import UTC, datetime
+
+from .provider import DatabaseProvider
+
+_LXMF_UPSERT_FIELDS = (
+    "hash",
+    "source_hash",
+    "destination_hash",
+    "peer_hash",
+    "state",
+    "progress",
+    "is_incoming",
+    "method",
+    "delivery_attempts",
+    "next_delivery_attempt_at",
+    "title",
+    "content",
+    "fields",
+    "timestamp",
+    "rssi",
+    "snr",
+    "quality",
+    "is_spam",
+    "reply_to_hash",
+    "attachments_stripped",
+    "path_hops_at_send",
+    "path_interface_at_send",
+    "path_finding_measure",
+    "path_row_hash_hex",
+)
+_LXMF_OPTIONAL_UPSERT_FIELDS = frozenset({"attachments_stripped"})
+_LXMF_EXPORT_ONLY_KEYS = frozenset({"id", "lxmf_icon"})
+
+
+class MessageDAO:
+    def __init__(self, provider: DatabaseProvider):
+        self.provider = provider
+        self._lxmf_columns_cache = None
+        self._lxmf_upsert_fields_cache = None
+
+    def _lxmf_table_columns(self):
+        if self._lxmf_columns_cache is None:
+            rows = self.provider.fetchall("PRAGMA table_info(lxmf_messages)")
+            self._lxmf_columns_cache = {row["name"] for row in rows}
+        return self._lxmf_columns_cache
+
+    def _lxmf_upsert_field_names(self):
+        if self._lxmf_upsert_fields_cache is None:
+            columns = self._lxmf_table_columns()
+            self._lxmf_upsert_fields_cache = [
+                field
+                for field in _LXMF_UPSERT_FIELDS
+                if field in columns or field not in _LXMF_OPTIONAL_UPSERT_FIELDS
+            ]
+        return self._lxmf_upsert_fields_cache
+
+    @staticmethod
+    def normalize_lxmf_message_for_import(data):
+        if not isinstance(data, dict):
+            data = dict(data)
+
+        row = {
+            key: value
+            for key, value in data.items()
+            if key not in _LXMF_EXPORT_ONLY_KEYS
+        }
+
+        message_hash = row.get("hash")
+        if not message_hash or not isinstance(message_hash, str):
+            return None
+
+        source_hash = row.get("source_hash")
+        destination_hash = row.get("destination_hash")
+        if not source_hash or not destination_hash:
+            return None
+
+        if not row.get("peer_hash"):
+            is_incoming = row.get("is_incoming")
+            row["peer_hash"] = (
+                source_hash if is_incoming in (1, True, "1") else destination_hash
+            )
+
+        fields_value = row.get("fields")
+        if isinstance(fields_value, dict):
+            row["fields"] = json.dumps(fields_value)
+        elif isinstance(fields_value, str):
+            stripped = fields_value.strip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, dict):
+                        row["fields"] = json.dumps(parsed)
+                except json.JSONDecodeError:
+                    pass
+
+        for key in ("is_incoming", "is_spam", "attachments_stripped"):
+            if key in row and isinstance(row[key], bool):
+                row[key] = int(row[key])
+
+        if row.get("progress") is None:
+            row["progress"] = 0.0
+
+        return row
+
+    def import_lxmf_messages(self, messages):
+        imported = 0
+        skipped = 0
+        errors = []
+
+        if not isinstance(messages, list):
+            raise ValueError("messages must be an array")
+
+        for index, message in enumerate(messages):
+            normalized = self.normalize_lxmf_message_for_import(message)
+            if normalized is None:
+                skipped += 1
+                continue
+            try:
+                self.upsert_lxmf_message(normalized)
+                imported += 1
+            except Exception as exc:
+                errors.append(
+                    {
+                        "index": index,
+                        "hash": normalized.get("hash"),
+                        "error": str(exc),
+                    },
+                )
+
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
+    def upsert_lxmf_message(self, data):
+        # Ensure data is a dict if it's a sqlite3.Row
+        if not isinstance(data, dict):
+            data = dict(data)
+
+        fields = self._lxmf_upsert_field_names()
+
+        columns = ", ".join(fields)
+        placeholders = ", ".join(["?"] * len(fields))
+        update_fields = [
+            f
+            for f in fields
+            if f != "hash"
+            and f
+            not in (
+                "timestamp",
+                "created_at",
+                "path_hops_at_send",
+                "path_interface_at_send",
+                "path_finding_measure",
+                "path_row_hash_hex",
+            )
+        ]
+        update_set = ", ".join([f"{f} = EXCLUDED.{f}" for f in update_fields])
+
+        query = (
+            f"INSERT INTO lxmf_messages ({columns}, created_at, updated_at) VALUES ({placeholders}, ?, ?) "
+            f"ON CONFLICT(hash) DO UPDATE SET {update_set}, updated_at = EXCLUDED.updated_at"
+        )
+
+        params = []
+        for field in fields:
+            val = data.get(field)
+            if field == "fields" and isinstance(val, dict):
+                val = json.dumps(val)
+            params.append(val)
+
+        now = datetime.now(UTC).isoformat()
+        created_at = data.get("created_at")
+        updated_at = data.get("updated_at")
+        if not isinstance(created_at, str) or not created_at.strip():
+            created_at = now
+        if not isinstance(updated_at, str) or not updated_at.strip():
+            updated_at = now
+        params.append(created_at)
+        params.append(updated_at)
+
+        self.provider.execute(query, params)
+
+    def set_lxmf_message_path_at_send_if_unset(
+        self, message_hash, hops, interface_name
+    ):
+        """Store Reticulum path snapshot once (send or receive); never overwrites."""
+        now = datetime.now(UTC).isoformat()
+        self.provider.execute(
+            "UPDATE lxmf_messages SET path_hops_at_send = ?, path_interface_at_send = ?, updated_at = ? "
+            "WHERE hash = ? AND path_hops_at_send IS NULL",
+            (hops, interface_name, now, message_hash),
+        )
+
+    def update_lxmf_message_state(
+        self,
+        message_hash,
+        state,
+        progress,
+        delivery_attempts,
+        next_delivery_attempt_at,
+        rssi=None,
+        snr=None,
+        quality=None,
+        method=None,
+    ):
+        """Lightweight update for delivery-state changes only.
+
+        Avoids re-serializing the full message (including base64 attachment
+        data) which the heavy ``upsert_lxmf_message`` path does.
+        """
+        now = datetime.now(UTC).isoformat()
+        if method is None:
+            self.provider.execute(
+                "UPDATE lxmf_messages SET state = ?, progress = ?, "
+                "delivery_attempts = ?, next_delivery_attempt_at = ?, "
+                "rssi = ?, snr = ?, quality = ?, updated_at = ? "
+                "WHERE hash = ?",
+                (
+                    state,
+                    progress,
+                    delivery_attempts,
+                    next_delivery_attempt_at,
+                    rssi,
+                    snr,
+                    quality,
+                    now,
+                    message_hash,
+                ),
+            )
+        else:
+            self.provider.execute(
+                "UPDATE lxmf_messages SET state = ?, progress = ?, "
+                "delivery_attempts = ?, next_delivery_attempt_at = ?, "
+                "rssi = ?, snr = ?, quality = ?, method = ?, updated_at = ? "
+                "WHERE hash = ?",
+                (
+                    state,
+                    progress,
+                    delivery_attempts,
+                    next_delivery_attempt_at,
+                    rssi,
+                    snr,
+                    quality,
+                    method,
+                    now,
+                    message_hash,
+                ),
+            )
+
+    def get_lxmf_message_by_hash(self, message_hash):
+        return self.provider.fetchone(
+            "SELECT * FROM lxmf_messages WHERE hash = ?",
+            (message_hash,),
+        )
+
+    def list_message_hashes_for_peer(self, peer_hash):
+        rows = self.provider.fetchall(
+            "SELECT hash FROM lxmf_messages WHERE peer_hash = ?",
+            (peer_hash,),
+        )
+        return [r["hash"] for r in rows]
+
+    def get_pinned_peer_hashes(self):
+        rows = self.provider.fetchall(
+            "SELECT peer_hash FROM lxmf_conversation_pins ORDER BY pinned_at DESC",
+        )
+        return [r["peer_hash"] for r in rows]
+
+    def is_peer_pinned(self, peer_hash):
+        row = self.provider.fetchone(
+            "SELECT 1 AS ok FROM lxmf_conversation_pins WHERE peer_hash = ?",
+            (peer_hash,),
+        )
+        return row is not None
+
+    def set_peer_pinned(self, peer_hash, pinned):
+        if pinned:
+            self.provider.execute(
+                """
+                INSERT INTO lxmf_conversation_pins (peer_hash, pinned_at)
+                VALUES (?, strftime('%s', 'now'))
+                ON CONFLICT(peer_hash) DO UPDATE SET pinned_at = EXCLUDED.pinned_at
+                """,
+                (peer_hash,),
+            )
+        else:
+            self.provider.execute(
+                "DELETE FROM lxmf_conversation_pins WHERE peer_hash = ?",
+                (peer_hash,),
+            )
+
+    def toggle_peer_pin(self, peer_hash):
+        if self.is_peer_pinned(peer_hash):
+            self.set_peer_pinned(peer_hash, False)
+            return False
+        self.set_peer_pinned(peer_hash, True)
+        return True
+
+    def list_message_hashes_with_timestamp_before(self, cutoff_ts: float) -> list[str]:
+        rows = self.provider.fetchall(
+            "SELECT hash FROM lxmf_messages WHERE timestamp IS NOT NULL AND timestamp < ?",
+            (cutoff_ts,),
+        )
+        return [r["hash"] for r in rows if r.get("hash")]
+
+    def prune_conversation_metadata_for_peers_with_no_messages(self) -> None:
+        self.provider.execute(
+            """
+            DELETE FROM lxmf_conversation_read_state
+            WHERE destination_hash NOT IN (
+                SELECT DISTINCT peer_hash FROM lxmf_messages WHERE peer_hash IS NOT NULL
+            )
+            """,
+        )
+        self.provider.execute(
+            """
+            DELETE FROM lxmf_conversation_folders
+            WHERE peer_hash NOT IN (
+                SELECT DISTINCT peer_hash FROM lxmf_messages WHERE peer_hash IS NOT NULL
+            )
+            """,
+        )
+        self.provider.execute(
+            """
+            DELETE FROM lxmf_conversation_pins
+            WHERE peer_hash NOT IN (
+                SELECT DISTINCT peer_hash FROM lxmf_messages WHERE peer_hash IS NOT NULL
+            )
+            """,
+        )
+
+    def delete_lxmf_messages_by_hashes(self, message_hashes):
+        if not message_hashes:
+            return
+        placeholders = ", ".join(["?"] * len(message_hashes))
+        self.provider.execute(
+            f"DELETE FROM lxmf_messages WHERE hash IN ({placeholders})",
+            tuple(message_hashes),
+        )
+
+    def delete_lxmf_message_by_hash(self, message_hash):
+        self.provider.execute(
+            "DELETE FROM lxmf_messages WHERE hash = ?",
+            (message_hash,),
+        )
+
+    def delete_all_lxmf_messages(self):
+        with self.provider:
+            self.provider.execute("DELETE FROM lxmf_messages")
+            self.provider.execute("DELETE FROM lxmf_conversation_read_state")
+
+    def get_all_lxmf_messages(self, limit=5000, offset=0):
+        return self.provider.fetchall(
+            "SELECT * FROM lxmf_messages ORDER BY id LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+
+    def count_lxmf_messages(self):
+        row = self.provider.fetchone("SELECT COUNT(*) AS count FROM lxmf_messages")
+        return row["count"] if row and row["count"] is not None else 0
+
+    def count_lxmf_messages_by_state(self, state):
+        row = self.provider.fetchone(
+            "SELECT COUNT(*) AS count FROM lxmf_messages WHERE state = ?",
+            (state,),
+        )
+        return row["count"] if row and row["count"] is not None else 0
+
+    def get_conversation_messages(self, destination_hash, limit=100, offset=0):
+        return self.provider.fetchall(
+            "SELECT * FROM lxmf_messages WHERE peer_hash = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (destination_hash, limit, offset),
+        )
+
+    def get_latest_user_facing_incoming_message(self, peer_hash, *, scan_limit=50):
+        """Return the most recent incoming user-facing message for ``peer_hash``.
+
+        Walks recent incoming messages in timestamp-descending order and applies
+        :func:`is_user_facing_lxmf_payload` in Python (the SQLite layer cannot
+        cheaply parse the JSON ``fields`` blob). ``scan_limit`` bounds the walk
+        so a long chain of reactions/telemetry won't degrade the bell endpoint.
+
+        Returns ``None`` if no user-facing incoming message exists in the
+        scanned window.
+        """
+        from meshchatx.src.backend.lxmf_utils import is_user_facing_lxmf_payload
+
+        rows = self.provider.fetchall(
+            "SELECT id, hash, peer_hash, source_hash, destination_hash, "
+            "is_incoming, title, content, fields, timestamp "
+            "FROM lxmf_messages WHERE peer_hash = ? AND is_incoming = 1 "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (peer_hash, scan_limit),
+        )
+        for row in rows:
+            row_dict = dict(row) if not isinstance(row, dict) else row
+            if is_user_facing_lxmf_payload(
+                row_dict.get("fields"),
+                row_dict.get("content"),
+                row_dict.get("title"),
+            ):
+                return row_dict
+        return None
+
+    CONVERSATION_LIST_COLUMNS = (
+        "m1.id, m1.hash, m1.source_hash, m1.destination_hash, m1.peer_hash, "
+        "m1.state, m1.is_incoming, m1.title, m1.timestamp, m1.created_at, m1.updated_at"
+    )
+
+    def get_conversations(self):
+        query = f"""
+            SELECT {self.CONVERSATION_LIST_COLUMNS} FROM lxmf_messages m1
+            INNER JOIN (
+                SELECT peer_hash, MAX(id) as max_id
+                FROM lxmf_messages
+                WHERE peer_hash IS NOT NULL
+                GROUP BY peer_hash
+            ) m2 ON m1.peer_hash = m2.peer_hash AND m1.id = m2.max_id
+            ORDER BY m1.id DESC
+        """
+        return self.provider.fetchall(query)
+
+    def mark_conversation_as_read(self, destination_hash):
+        now = datetime.now(UTC).isoformat()
+        self.provider.execute(
+            """
+            INSERT INTO lxmf_conversation_read_state (destination_hash, last_read_at, created_at, updated_at) 
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(destination_hash) DO UPDATE SET 
+                last_read_at = EXCLUDED.last_read_at,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (destination_hash, now, now, now),
+        )
+
+    def mark_conversations_as_read(self, destination_hashes):
+        if not destination_hashes:
+            return
+        now = datetime.now(UTC).isoformat()
+        with self.provider:
+            self.provider.executemany(
+                """
+                INSERT INTO lxmf_conversation_read_state (destination_hash, last_read_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(destination_hash) DO UPDATE SET
+                    last_read_at = EXCLUDED.last_read_at,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                [(h, now, now, now) for h in destination_hashes],
+            )
+
+    def mark_all_conversations_as_read(self):
+        now = datetime.now(UTC).isoformat()
+        self.provider.execute(
+            """
+            INSERT INTO lxmf_conversation_read_state (destination_hash, last_read_at, created_at, updated_at)
+            SELECT peer_hash, ?, ?, ? FROM lxmf_messages
+            WHERE peer_hash IS NOT NULL
+            GROUP BY peer_hash
+            ON CONFLICT(destination_hash) DO UPDATE SET
+                last_read_at = EXCLUDED.last_read_at,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (now, now, now),
+        )
+
+    def is_conversation_unread(self, destination_hash):
+        row = self.provider.fetchone(
+            """
+            SELECT m.timestamp, r.last_read_at 
+            FROM lxmf_messages m
+            LEFT JOIN lxmf_conversation_read_state r ON r.destination_hash = ?
+            WHERE m.peer_hash = ? AND m.is_incoming = 1
+            ORDER BY m.timestamp DESC LIMIT 1
+        """,
+            (destination_hash, destination_hash),
+        )
+
+        if not row:
+            return False
+        if not row["last_read_at"]:
+            return True
+
+        last_read_at = datetime.fromisoformat(row["last_read_at"])
+        if last_read_at.tzinfo is None:
+            last_read_at = last_read_at.replace(tzinfo=UTC)
+
+        return row["timestamp"] > last_read_at.timestamp()
+
+    def mark_stuck_messages_as_failed(self):
+        self.provider.execute(
+            """
+            UPDATE lxmf_messages
+            SET state = 'generating'
+            WHERE is_incoming = 1 AND state = 'failed'
+            """,
+        )
+
+        # Only outbound messages can get stuck mid-send; incoming messages are
+        # never failed (we already received them).
+        self.provider.execute(
+            """
+            UPDATE lxmf_messages
+            SET state = 'failed', updated_at = ?
+            WHERE is_incoming = 0
+            AND (
+                state = 'outbound'
+                OR (state = 'sent' AND method = 'opportunistic')
+                OR state = 'sending'
+                OR state = 'generating'
+            )
+            """,
+            (datetime.now(UTC).isoformat(),),
+        )
+
+    def get_failed_messages_for_destination(self, destination_hash):
+        return self.provider.fetchall(
+            "SELECT * FROM lxmf_messages WHERE state = 'failed' AND peer_hash = ? ORDER BY id ASC",
+            (destination_hash,),
+        )
+
+    def get_failed_messages_count(self, destination_hash):
+        row = self.provider.fetchone(
+            "SELECT COUNT(*) as count FROM lxmf_messages WHERE state = 'failed' AND peer_hash = ?",
+            (destination_hash,),
+        )
+        return row["count"] if row else 0
+
+    def get_conversations_unread_states(self, destination_hashes):
+        if not destination_hashes:
+            return {}
+
+        placeholders = ", ".join(["?"] * len(destination_hashes))
+        query = f"""
+            SELECT peer_hash, MAX(timestamp) as latest_ts, last_read_at
+            FROM lxmf_messages m
+            LEFT JOIN lxmf_conversation_read_state r ON r.destination_hash = m.peer_hash
+            WHERE m.peer_hash IN ({placeholders}) AND m.is_incoming = 1
+            GROUP BY m.peer_hash
+        """
+        rows = self.provider.fetchall(query, destination_hashes)
+
+        unread_states = {}
+        for row in rows:
+            peer_hash = row["peer_hash"]
+            latest_ts = row["latest_ts"]
+            last_read_at_str = row["last_read_at"]
+
+            if not last_read_at_str:
+                unread_states[peer_hash] = True
+                continue
+
+            last_read_at = datetime.fromisoformat(last_read_at_str)
+            if last_read_at.tzinfo is None:
+                last_read_at = last_read_at.replace(tzinfo=UTC)
+
+            unread_states[peer_hash] = latest_ts > last_read_at.timestamp()
+
+        return unread_states
+
+    def get_conversations_failed_counts(self, destination_hashes):
+        if not destination_hashes:
+            return {}
+        placeholders = ", ".join(["?"] * len(destination_hashes))
+        rows = self.provider.fetchall(
+            f"SELECT peer_hash, COUNT(*) as count FROM lxmf_messages WHERE state = 'failed' AND peer_hash IN ({placeholders}) GROUP BY peer_hash",
+            tuple(destination_hashes),
+        )
+        return {row["peer_hash"]: row["count"] for row in rows}
+
+    def get_conversations_attachment_states(self, destination_hashes):
+        if not destination_hashes:
+            return {}
+
+        placeholders = ", ".join(["?"] * len(destination_hashes))
+        query = f"""
+            SELECT peer_hash, 1 as has_attachments
+            FROM lxmf_messages
+            WHERE peer_hash IN ({placeholders})
+            AND fields IS NOT NULL AND fields != '{{}}' AND fields != ''
+            GROUP BY peer_hash
+        """
+        rows = self.provider.fetchall(query, destination_hashes)
+
+        return {row["peer_hash"]: True for row in rows}
+
+    # Forwarding Mappings
+    def get_forwarding_mapping(
+        self,
+        alias_hash=None,
+        original_sender_hash=None,
+        final_recipient_hash=None,
+    ):
+        if alias_hash:
+            return self.provider.fetchone(
+                "SELECT * FROM lxmf_forwarding_mappings WHERE alias_hash = ?",
+                (alias_hash,),
+            )
+        if original_sender_hash and final_recipient_hash:
+            return self.provider.fetchone(
+                "SELECT * FROM lxmf_forwarding_mappings WHERE original_sender_hash = ? AND final_recipient_hash = ?",
+                (original_sender_hash, final_recipient_hash),
+            )
+        return None
+
+    def create_forwarding_mapping(self, data):
+        # Ensure data is a dict if it's a sqlite3.Row
+        if not isinstance(data, dict):
+            data = dict(data)
+
+        fields = [
+            "alias_identity_private_key",
+            "alias_hash",
+            "original_sender_hash",
+            "final_recipient_hash",
+            "original_destination_hash",
+        ]
+        columns = ", ".join(fields)
+        placeholders = ", ".join(["?"] * len(fields))
+        query = f"INSERT INTO lxmf_forwarding_mappings ({columns}, created_at) VALUES ({placeholders}, ?)"
+        params = [data.get(f) for f in fields]
+        params.append(datetime.now(UTC).isoformat())
+        self.provider.execute(query, params)
+
+    def get_all_forwarding_mappings(self):
+        return self.provider.fetchall("SELECT * FROM lxmf_forwarding_mappings")
+
+    def mark_notification_as_viewed(self, destination_hash):
+        now = datetime.now(UTC).isoformat()
+        self.provider.execute(
+            """
+            INSERT INTO notification_viewed_state (destination_hash, last_viewed_at, created_at, updated_at) 
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(destination_hash) DO UPDATE SET 
+                last_viewed_at = EXCLUDED.last_viewed_at,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (destination_hash, now, now, now),
+        )
+
+    def mark_all_notifications_as_viewed(self, destination_hashes=None):
+        now = datetime.now(UTC).isoformat()
+        if destination_hashes:
+            with self.provider:
+                self.provider.executemany(
+                    """
+                    INSERT INTO notification_viewed_state (destination_hash, last_viewed_at, created_at, updated_at) 
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(destination_hash) DO UPDATE SET 
+                        last_viewed_at = EXCLUDED.last_viewed_at,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    [(h, now, now, now) for h in destination_hashes],
+                )
+        else:
+            # mark all conversations as viewed
+            self.provider.execute(
+                """
+                INSERT INTO notification_viewed_state (destination_hash, last_viewed_at, created_at, updated_at)
+                SELECT peer_hash, ?, ?, ? FROM lxmf_messages
+                WHERE peer_hash IS NOT NULL
+                GROUP BY peer_hash
+                ON CONFLICT(destination_hash) DO UPDATE SET 
+                    last_viewed_at = EXCLUDED.last_viewed_at,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (now, now, now),
+            )
+
+    def is_notification_viewed(self, destination_hash, message_timestamp):
+        row = self.provider.fetchone(
+            "SELECT last_viewed_at FROM notification_viewed_state WHERE destination_hash = ?",
+            (destination_hash,),
+        )
+        if not row or not row["last_viewed_at"]:
+            return False
+
+        last_viewed_at = datetime.fromisoformat(row["last_viewed_at"])
+        if last_viewed_at.tzinfo is None:
+            last_viewed_at = last_viewed_at.replace(tzinfo=UTC)
+
+        return message_timestamp <= last_viewed_at.timestamp()
+
+    # Folders
+    def get_all_folders(self):
+        return self.provider.fetchall("SELECT * FROM lxmf_folders ORDER BY name ASC")
+
+    def create_folder(self, name):
+        now = datetime.now(UTC).isoformat()
+        return self.provider.execute(
+            "INSERT INTO lxmf_folders (name, created_at, updated_at) VALUES (?, ?, ?)",
+            (name, now, now),
+        )
+
+    def rename_folder(self, folder_id, new_name):
+        now = datetime.now(UTC).isoformat()
+        self.provider.execute(
+            "UPDATE lxmf_folders SET name = ?, updated_at = ? WHERE id = ?",
+            (new_name, now, folder_id),
+        )
+
+    def delete_folder(self, folder_id):
+        self.provider.execute("DELETE FROM lxmf_folders WHERE id = ?", (folder_id,))
+
+    def get_conversation_folder(self, peer_hash):
+        return self.provider.fetchone(
+            "SELECT * FROM lxmf_conversation_folders WHERE peer_hash = ?",
+            (peer_hash,),
+        )
+
+    def move_conversation_to_folder(self, peer_hash, folder_id):
+        now = datetime.now(UTC).isoformat()
+        if folder_id is None:
+            self.provider.execute(
+                "DELETE FROM lxmf_conversation_folders WHERE peer_hash = ?",
+                (peer_hash,),
+            )
+        else:
+            self.provider.execute(
+                """
+                INSERT INTO lxmf_conversation_folders (peer_hash, folder_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(peer_hash) DO UPDATE SET
+                    folder_id = EXCLUDED.folder_id,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (peer_hash, folder_id, now, now),
+            )
+
+    def move_conversations_to_folder(self, peer_hashes, folder_id):
+        if not peer_hashes:
+            return
+        now = datetime.now(UTC).isoformat()
+        with self.provider:
+            if folder_id is None:
+                placeholders = ", ".join(["?"] * len(peer_hashes))
+                self.provider.execute(
+                    f"DELETE FROM lxmf_conversation_folders WHERE peer_hash IN ({placeholders})",
+                    tuple(peer_hashes),
+                )
+            else:
+                self.provider.executemany(
+                    """
+                    INSERT INTO lxmf_conversation_folders (peer_hash, folder_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(peer_hash) DO UPDATE SET
+                        folder_id = EXCLUDED.folder_id,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    [(h, folder_id, now, now) for h in peer_hashes],
+                )
+
+    def get_all_conversation_folders(self):
+        return self.provider.fetchall("SELECT * FROM lxmf_conversation_folders")

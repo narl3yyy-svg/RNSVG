@@ -1,0 +1,314 @@
+# SPDX-License-Identifier: 0BSD
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from meshchatx.src.backend.rncp_handler import RNCPHandler
+
+
+@pytest.fixture
+def mock_reticulum():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_identity():
+    return MagicMock()
+
+
+@pytest.fixture
+def rncp_handler(mock_reticulum, mock_identity, tmp_path):
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    return RNCPHandler(mock_reticulum, mock_identity, str(storage_dir))
+
+
+def test_rncp_handler_init(rncp_handler, mock_reticulum, mock_identity):
+    assert rncp_handler.reticulum == mock_reticulum
+    assert rncp_handler.identity == mock_identity
+    assert rncp_handler.active_transfers == {}
+
+
+@patch("meshchatx.src.backend.rncp_handler.RNS.Identity")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Destination")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Reticulum")
+def test_setup_receive_destination(
+    mock_rns_reticulum,
+    mock_dest,
+    mock_identity_class,
+    rncp_handler,
+):
+    mock_rns_reticulum.identitypath = "/tmp/rns/identities"
+    mock_id_obj = MagicMock()
+    mock_identity_class.from_file.return_value = mock_id_obj
+    mock_dest_obj = MagicMock()
+    mock_dest_obj.hash = b"dest_hash"
+    mock_dest.return_value = mock_dest_obj
+
+    with patch("os.path.isfile", return_value=True):
+        hash_hex = rncp_handler.setup_receive_destination(allowed_hashes=["abcd"])
+        assert hash_hex == b"dest_hash".hex()
+        assert bytes.fromhex("abcd") in rncp_handler.allowed_identity_hashes
+
+
+def test_receive_sender_identified_allowed(rncp_handler):
+    mock_link = MagicMock()
+    mock_identity = MagicMock()
+    mock_identity.hash = b"allowed"
+    rncp_handler.allowed_identity_hashes = [b"allowed"]
+
+    rncp_handler._receive_sender_identified(mock_link, mock_identity)
+    mock_link.teardown.assert_not_called()
+
+
+def test_receive_sender_identified_denied(rncp_handler):
+    mock_link = MagicMock()
+    mock_identity = MagicMock()
+    mock_identity.hash = b"denied"
+    rncp_handler.allowed_identity_hashes = [b"allowed"]
+
+    rncp_handler._receive_sender_identified(mock_link, mock_identity)
+    mock_link.teardown.assert_called_once()
+
+
+def test_receive_resource_callback(rncp_handler):
+    mock_resource = MagicMock()
+    mock_resource.link.get_remote_identity.return_value.hash = b"allowed"
+    rncp_handler.allowed_identity_hashes = [b"allowed"]
+
+    assert rncp_handler._receive_resource_callback(mock_resource) is True
+
+    mock_resource.link.get_remote_identity.return_value.hash = b"denied"
+    assert rncp_handler._receive_resource_callback(mock_resource) is False
+
+
+def test_receive_resource_started(rncp_handler):
+    mock_resource = MagicMock()
+    mock_resource.hash = b"res_hash"
+
+    rncp_handler._receive_resource_started(mock_resource)
+    assert b"res_hash".hex() in rncp_handler.active_transfers
+    assert rncp_handler.active_transfers[b"res_hash".hex()]["status"] == "receiving"
+
+
+def test_get_listener_status_not_listening(rncp_handler):
+    s = rncp_handler.get_listener_status()
+    assert s["listening"] is False
+    assert s["destination_hash"] is None
+    assert s["allowed_hashes"] == []
+
+
+@patch("meshchatx.src.backend.rncp_handler.RNS.Transport")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Identity")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Destination")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Reticulum")
+def test_teardown_receive_destination_deregisters(
+    mock_rns_reticulum,
+    mock_dest_class,
+    mock_identity_class,
+    mock_transport,
+    rncp_handler,
+):
+    mock_rns_reticulum.identitypath = "/tmp/rns/identities"
+    mock_id_obj = MagicMock()
+    mock_identity_class.from_file.return_value = mock_id_obj
+    mock_dest_obj = MagicMock()
+    mock_dest_obj.hash = b"\x01" * 16
+    mock_dest_class.return_value = mock_dest_obj
+
+    with patch("os.path.isfile", return_value=True):
+        rncp_handler.setup_receive_destination(allowed_hashes=["ab" * 16])
+
+    rncp_handler.teardown_receive_destination()
+
+    mock_transport.deregister_destination.assert_called_once_with(mock_dest_obj)
+    assert rncp_handler.receive_destination is None
+
+
+@patch("meshchatx.src.backend.rncp_handler.RNS.Transport")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Identity")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Destination")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Reticulum")
+def test_setup_receive_destination_idempotent_restarts_listener(
+    mock_rns_reticulum,
+    mock_dest_class,
+    mock_identity_class,
+    mock_transport,
+    rncp_handler,
+):
+    mock_rns_reticulum.identitypath = "/tmp/rns/identities"
+    mock_id_obj = MagicMock()
+    mock_identity_class.from_file.return_value = mock_id_obj
+    first_dest = MagicMock()
+    first_dest.hash = b"\x02" * 16
+    second_dest = MagicMock()
+    second_dest.hash = b"\x03" * 16
+    mock_dest_class.side_effect = [first_dest, second_dest]
+
+    with patch("os.path.isfile", return_value=True):
+        rncp_handler.setup_receive_destination(allowed_hashes=["cd" * 16])
+        rncp_handler.setup_receive_destination(allowed_hashes=["ef" * 16])
+
+    assert mock_transport.deregister_destination.call_count == 1
+    assert mock_transport.deregister_destination.call_args[0][0] is first_dest
+    assert rncp_handler.receive_destination is second_dest
+
+
+@patch("meshchatx.src.backend.rncp_handler.RNS.Transport")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Identity")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Destination")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Reticulum")
+def test_setup_receive_destination_empty_allowlist_clears_previous(
+    mock_rns_reticulum,
+    mock_dest_class,
+    mock_identity_class,
+    mock_transport,
+    rncp_handler,
+):
+    mock_rns_reticulum.identitypath = "/tmp/rns/identities"
+    mock_id_obj = MagicMock()
+    mock_identity_class.from_file.return_value = mock_id_obj
+    mock_dest_obj = MagicMock()
+    mock_dest_obj.hash = b"\x04" * 16
+    mock_dest_class.return_value = mock_dest_obj
+
+    with patch("os.path.isfile", return_value=True):
+        rncp_handler.setup_receive_destination(allowed_hashes=["cd" * 16])
+        assert len(rncp_handler.allowed_identity_hashes) == 1
+        rncp_handler.setup_receive_destination(allowed_hashes=[])
+        assert rncp_handler.allowed_identity_hashes == []
+
+
+class _CapturingResource:
+    served_path = None
+
+    def __init__(self, file_obj, link, metadata=None, auto_compress=True, **kwargs):
+        _CapturingResource.served_path = getattr(file_obj, "name", None)
+        file_obj.close()
+
+
+class _FakeLink:
+    def __init__(self, link_id):
+        self.link_id = link_id
+
+    def get_remote_identity(self):
+        return None
+
+
+def test_fetch_request_without_jail_is_denied(rncp_handler, tmp_path):
+    """A fetch listener with no jail must never serve arbitrary host files."""
+    secret = tmp_path / "host_secret.key"
+    secret.write_text("PRIVATE")
+    rncp_handler.fetch_jail = None
+    _CapturingResource.served_path = None
+
+    link = _FakeLink(link_id=b"link-id")
+    with (
+        patch("meshchatx.src.backend.rncp_handler.RNS.Transport") as transport,
+        patch(
+            "meshchatx.src.backend.rncp_handler.RNS.Resource",
+            _CapturingResource,
+        ),
+    ):
+        transport.active_links = [link]
+        result = rncp_handler._fetch_request(
+            path="fetch_file",
+            data=str(secret),
+            request_id=None,
+            link_id=link.link_id,
+            remote_identity=None,
+            requested_at=0,
+        )
+
+    assert result == RNCPHandler.REQ_FETCH_NOT_ALLOWED
+    assert _CapturingResource.served_path is None
+
+
+def test_fetch_request_jail_blocks_traversal(rncp_handler, tmp_path):
+    """Path traversal outside the jail is rejected."""
+    jail = tmp_path / "share"
+    jail.mkdir()
+    secret = tmp_path / "host_secret.key"
+    secret.write_text("PRIVATE")
+    rncp_handler.fetch_jail = str(jail)
+    _CapturingResource.served_path = None
+
+    link = _FakeLink(link_id=b"link-id")
+    with (
+        patch("meshchatx.src.backend.rncp_handler.RNS.Transport") as transport,
+        patch(
+            "meshchatx.src.backend.rncp_handler.RNS.Resource",
+            _CapturingResource,
+        ),
+    ):
+        transport.active_links = [link]
+        result = rncp_handler._fetch_request(
+            path="fetch_file",
+            data="../host_secret.key",
+            request_id=None,
+            link_id=link.link_id,
+            remote_identity=None,
+            requested_at=0,
+        )
+
+    assert result == RNCPHandler.REQ_FETCH_NOT_ALLOWED
+    assert _CapturingResource.served_path is None
+
+
+def test_fetch_request_jail_serves_file_inside_jail(rncp_handler, tmp_path):
+    """A file inside the jail is served normally."""
+    jail = tmp_path / "share"
+    jail.mkdir()
+    shared = jail / "public.txt"
+    shared.write_text("ok")
+    rncp_handler.fetch_jail = str(jail)
+    _CapturingResource.served_path = None
+
+    link = _FakeLink(link_id=b"link-id")
+    with (
+        patch("meshchatx.src.backend.rncp_handler.RNS.Transport") as transport,
+        patch(
+            "meshchatx.src.backend.rncp_handler.RNS.Resource",
+            _CapturingResource,
+        ),
+    ):
+        transport.active_links = [link]
+        result = rncp_handler._fetch_request(
+            path="fetch_file",
+            data="public.txt",
+            request_id=None,
+            link_id=link.link_id,
+            remote_identity=None,
+            requested_at=0,
+        )
+
+    assert result is True
+    assert _CapturingResource.served_path == str(shared)
+
+
+@patch("meshchatx.src.backend.rncp_handler.RNS.Identity")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Destination")
+@patch("meshchatx.src.backend.rncp_handler.RNS.Reticulum")
+def test_setup_defaults_jail_when_fetch_enabled(
+    mock_rns_reticulum,
+    mock_dest_class,
+    mock_identity_class,
+    rncp_handler,
+):
+    """Enabling fetch without a jail confines reads to a shared subdirectory."""
+    mock_rns_reticulum.identitypath = "/tmp/rns/identities"
+    mock_identity_class.from_file.return_value = MagicMock()
+    mock_dest_obj = MagicMock()
+    mock_dest_obj.hash = b"\x05" * 16
+    mock_dest_class.return_value = mock_dest_obj
+
+    with patch("os.path.isfile", return_value=True):
+        rncp_handler.setup_receive_destination(
+            allowed_hashes=["ab" * 16],
+            fetch_allowed=True,
+            fetch_jail=None,
+        )
+
+    assert rncp_handler.fetch_jail
+    assert rncp_handler.fetch_jail.endswith("rncp_shared")
