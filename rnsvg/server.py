@@ -7,6 +7,7 @@ import sys
 import webbrowser
 
 from aiohttp import web
+from aiohttp.web_runner import GracefulExit
 
 from rnsvg.config import AppConfig
 from rnsvg.rns_transport import RNSTransport
@@ -74,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         web.run_app(app, host=config.web_host, port=config.web_port, print=None)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, GracefulExit):
         return 0
     except OSError as exc:
         print(f"Failed to start server: {exc}", file=sys.stderr)

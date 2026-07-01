@@ -617,6 +617,8 @@ async def _websocket(request: web.Request) -> web.WebSocketResponse:
                 await ws.send_str(json.dumps(websocket_pong()))
             elif data.get("type") == "keyboard_shortcuts.get":
                 await ws.send_str(json.dumps(keyboard_shortcuts_response()))
+    except asyncio.CancelledError:
+        pass
     finally:
         hub.remove(ws)
     return ws

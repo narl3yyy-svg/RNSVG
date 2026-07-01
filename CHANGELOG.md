@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.4] - 2026-06-30
+
+### Fixed
+
+- **Reticulum config**: Strip `key = None` lines from interface blocks on startup and when saving interfaces (fixes `bitrate` parse crash).
+- **Shutdown**: Ctrl+C exits cleanly without WebSocket `CancelledError` tracebacks.
+
 ## [0.3.3] - 2026-06-30
 
 ### Added

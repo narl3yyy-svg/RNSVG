@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import copy
+import re
 from pathlib import Path
 from typing import Any
 
 import RNS.vendor.configobj
+
+_NONE_CONFIG_LINE = re.compile(r"^\s+\S+\s*=\s*None\s*$", re.IGNORECASE)
 
 
 INTERFACE_HELP: dict[str, str] = {
@@ -99,11 +102,13 @@ class InterfacesManager:
         config = self._load_configobj()
         if "interfaces" not in config:
             config["interfaces"] = {}
-        iface = {"type": interface_type, "enabled": fields.get("enabled", "yes")}
+        iface = {"type": interface_type, "enabled": _normalize_enabled(fields.get("enabled", "yes"))}
         for key, value in fields.items():
-            if key in {"name", "type"}:
+            if key in {"name", "type", "enabled"}:
                 continue
-            iface[key] = value
+            normalized = _normalize_config_value(value)
+            if normalized is not None:
+                iface[key] = normalized
         config["interfaces"][name] = iface
         self._save_configobj(config)
 
@@ -136,4 +141,44 @@ class InterfacesManager:
         return RNS.vendor.configobj.ConfigObj(lines)
 
     def _save_configobj(self, config: RNS.vendor.configobj.ConfigObj) -> None:
-        self.write_config_text("\n".join(config.write()))
+        text = "\n".join(config.write())
+        sanitized, _ = sanitize_rns_config_text(text)
+        self.write_config_text(sanitized)
+
+
+def _normalize_enabled(value: Any) -> str:
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if value is None:
+        return "yes"
+    text = str(value).strip().lower()
+    if text in {"yes", "true", "1", "on"}:
+        return "yes"
+    return "no"
+
+
+def _normalize_config_value(value: Any) -> Any | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.lower() == "none":
+            return None
+        return stripped
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return value
+
+
+def sanitize_rns_config_text(text: str) -> tuple[str, bool]:
+    """Drop ``key = None`` lines — Reticulum cannot parse them as integers."""
+    lines = text.splitlines()
+    out: list[str] = []
+    changed = False
+    for line in lines:
+        if _NONE_CONFIG_LINE.match(line):
+            changed = True
+            continue
+        out.append(line)
+    result = "\n".join(out) + ("\n" if text.endswith("\n") else "")
+    return result, changed

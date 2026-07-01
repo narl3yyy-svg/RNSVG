@@ -194,20 +194,30 @@ def _migrate_legacy_auto_only_config(text: str) -> str | None:
 
 
 def ensure_rns_config(config_path: Path) -> Path:
+    from rnsvg.interfaces_manager import sanitize_rns_config_text
+
     config_path = Path(config_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     if config_path.is_file():
         try:
             text = config_path.read_text(encoding="utf-8")
             if "[reticulum]" in text and "[interfaces]" in text:
-                migrated = _migrate_legacy_auto_only_config(text)
-                if migrated and migrated != text:
-                    config_path.write_text(migrated, encoding="utf-8")
-                    print(
-                        "RNSVG: adjusted Reticulum config — removed invalid LocalInterface "
-                        "and disabled AutoInterface (avoids port conflicts). "
-                        "Enable LAN Auto Discovery in Interfaces when no other Reticulum is running.",
-                    )
+                sanitized, none_removed = sanitize_rns_config_text(text)
+                migrated = _migrate_legacy_auto_only_config(sanitized)
+                final = migrated if migrated else sanitized
+                if final != text:
+                    config_path.write_text(final, encoding="utf-8")
+                    if none_removed:
+                        print(
+                            "RNSVG: cleaned Reticulum config — removed invalid 'None' "
+                            "interface values that prevent startup.",
+                        )
+                    if migrated and migrated != sanitized:
+                        print(
+                            "RNSVG: adjusted Reticulum config — removed invalid LocalInterface "
+                            "and disabled AutoInterface (avoids port conflicts). "
+                            "Enable LAN Auto Discovery in Interfaces when no other Reticulum is running.",
+                        )
                 return config_path
         except OSError:
             pass
