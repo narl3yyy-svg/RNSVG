@@ -306,8 +306,8 @@
                                         </SidebarLink>
                                     </li>
 
-                                    <!-- archives -->
-                                    <li>
+                                    <!-- archives (hidden in RNSVG) -->
+                                    <li v-if="false">
                                         <SidebarLink :to="{ name: 'archives' }" :is-collapsed="isSidebarCollapsed">
                                             <template #icon>
                                                 <MaterialDesignIcon
@@ -475,7 +475,7 @@
                                             </div>
                                         </div>
                                         <div class="p-2 dark:border-zinc-900 overflow-hidden text-xs">
-                                            <div>{{ $t("app.lxmf_address") }}</div>
+                                            <div>{{ $t("app.node_address") }}</div>
                                             <div class="flex min-w-0 items-center gap-1">
                                                 <div
                                                     class="min-w-0 flex-1 text-[10px] text-gray-700 dark:text-zinc-400 truncate font-mono cursor-pointer"

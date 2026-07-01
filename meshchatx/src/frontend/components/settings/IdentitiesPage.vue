@@ -114,29 +114,29 @@
                                     {{ $t("app.copy") }}
                                 </button>
                             </div>
-                            <div v-if="currentIdentity.lxmf_address" class="address-card">
-                                <div class="address-card__label">{{ $t("app.lxmf_address") }}</div>
+                            <div v-if="currentIdentity.node_address" class="address-card">
+                                <div class="address-card__label">{{ $t("identities.node_address") }}</div>
                                 <div class="address-card__value monospace-field">
-                                    {{ currentIdentity.lxmf_address }}
+                                    {{ currentIdentity.node_address }}
                                 </div>
                                 <button
                                     type="button"
                                     class="address-card__action"
-                                    @click="copyAddress(currentIdentity.lxmf_address)"
+                                    @click="copyAddress(currentIdentity.node_address)"
                                 >
                                     <MaterialDesignIcon icon-name="content-copy" class="w-4 h-4" />
                                     {{ $t("app.copy") }}
                                 </button>
                             </div>
-                            <div v-if="currentIdentity.lxst_address" class="address-card">
-                                <div class="address-card__label">{{ $t("identities.lxst_address") }}</div>
+                            <div v-if="currentIdentity.telephony_address" class="address-card">
+                                <div class="address-card__label">{{ $t("identities.telephony_address") }}</div>
                                 <div class="address-card__value monospace-field">
-                                    {{ currentIdentity.lxst_address }}
+                                    {{ currentIdentity.telephony_address }}
                                 </div>
                                 <button
                                     type="button"
                                     class="address-card__action"
-                                    @click="copyAddress(currentIdentity.lxst_address)"
+                                    @click="copyAddress(currentIdentity.telephony_address)"
                                 >
                                     <MaterialDesignIcon icon-name="content-copy" class="w-4 h-4" />
                                     {{ $t("app.copy") }}
@@ -168,8 +168,8 @@
                             v-memo="[
                                 identity.hash,
                                 identity.display_name,
-                                identity.lxmf_address,
-                                identity.lxst_address,
+                                identity.node_address,
+                                identity.telephony_address,
                                 identity.message_count,
                                 identity.icon_name,
                                 identity.icon_background_colour,
@@ -219,7 +219,7 @@
                                 </div>
                             </div>
                             <div
-                                v-if="identity.lxmf_address || identity.lxst_address || identity.hash"
+                                v-if="identity.node_address || identity.telephony_address || identity.hash"
                                 class="mt-2 pl-11 sm:pl-14"
                             >
                                 <button
@@ -248,29 +248,29 @@
                                             {{ $t("app.copy") }}
                                         </button>
                                     </div>
-                                    <div v-if="identity.lxmf_address" class="address-card">
-                                        <div class="address-card__label">{{ $t("app.lxmf_address") }}</div>
+                                    <div v-if="identity.node_address" class="address-card">
+                                        <div class="address-card__label">{{ $t("identities.node_address") }}</div>
                                         <div class="address-card__value monospace-field text-xs">
-                                            {{ identity.lxmf_address }}
+                                            {{ identity.node_address }}
                                         </div>
                                         <button
                                             type="button"
                                             class="address-card__action"
-                                            @click="copyAddress(identity.lxmf_address)"
+                                            @click="copyAddress(identity.node_address)"
                                         >
                                             <MaterialDesignIcon icon-name="content-copy" class="w-4 h-4" />
                                             {{ $t("app.copy") }}
                                         </button>
                                     </div>
-                                    <div v-if="identity.lxst_address" class="address-card">
-                                        <div class="address-card__label">{{ $t("identities.lxst_address") }}</div>
+                                    <div v-if="identity.telephony_address" class="address-card">
+                                        <div class="address-card__label">{{ $t("identities.telephony_address") }}</div>
                                         <div class="address-card__value monospace-field text-xs">
-                                            {{ identity.lxst_address }}
+                                            {{ identity.telephony_address }}
                                         </div>
                                         <button
                                             type="button"
                                             class="address-card__action"
-                                            @click="copyAddress(identity.lxst_address)"
+                                            @click="copyAddress(identity.telephony_address)"
                                         >
                                             <MaterialDesignIcon icon-name="content-copy" class="w-4 h-4" />
                                             {{ $t("app.copy") }}

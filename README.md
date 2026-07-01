@@ -4,25 +4,28 @@
 
 | | |
 |---|---|
-| **Version** | 0.1.0 (Phase 0) |
+| **Version** | 0.3.3 (Phase 2) |
 | **UI** | MeshChatX Vue 3 frontend (rebranded) |
 | **Transport** | Reticulum Network Stack (`rns`) |
-| **Status** | UI boots with stub backend — messaging/calls coming in Phase 1+ |
+| **Status** | Identity, discovery, and text messaging over raw RNS packets |
 
 ## What is RNSVG?
 
 RNSVG takes the polished MeshChatX frontend (chat layout, file UI, call UI, settings, multi-identity shell) and replaces the LXMF/LXST backend with a clean **raw Reticulum** implementation.
 
-**Included in Phase 0:**
-- MeshChatX Vue UI (Nomad Network tab removed)
-- New `rnsvg` Python backend (stub API + minimal RNS init)
+**Included now:**
+- MeshChatX Vue UI (Nomad Network tab removed, RNSVG branding)
+- `rnsvg` Python backend on raw RNS (no LXMF/LXST)
+- Multi-identity management with persistent storage
+- Peer discovery via `rnsvg.node` announces
+- Text messaging over `RNS.Packet` to `rnsvg.inbox` destinations
+- WebSocket push for new messages (`lxmf.delivery`, `lxmf_message_created`)
+- Share folder scaffold, telephony scaffold, interface management
 - Run-from-source scripts for Linux, macOS, Windows
-- Android project scaffold (APK build path documented)
 
 **Not included yet (planned):**
-- Real text messaging over `RNS.Packet`
 - Peer file transfer over `RNS.Resource` (unlimited size, link speed)
-- Voice/video over `RNS.Buffer` + Opus
+- Full voice/video over `RNS.Buffer` + Opus
 - Electron desktop builds (deferred)
 
 ## Quick Start
@@ -104,24 +107,26 @@ export RNSVG_DATA_DIR=~/.rnsvg
 # Edit ~/.rnsvg/.reticulum/config with your TCP/WireGuard interfaces
 ```
 
-## Architecture (Phase 0)
+## Architecture
 
 ```
 meshchatx/src/frontend/   Vue 3 UI (from MeshChatX, rebranded)
         │
         │  HTTP /api/v1/*  +  WebSocket /ws
         ▼
-rnsvg/                    New Python backend
+rnsvg/                    Python backend
   ├── server.py           Entry point
-  ├── stub_router.py      API compatibility layer (stub responses)
-  ├── responses.py        JSON shapes matching MeshChatX contracts
-  └── rns_transport.py    Minimal RNS.Reticulum init
+  ├── router.py           API routes (MeshChatX-compatible shapes)
+  ├── messaging.py        Text messages via RNS.Packet → rnsvg.inbox
+  ├── discovery.py        Peer announces (rnsvg.node)
+  ├── identity_manager.py Persistent identities
+  └── rns_transport.py    Reticulum init + destinations
         │
         ▼
    Reticulum Network
 ```
 
-The legacy `meshchatx/meshchat.py` and LXMF backend are **not used** in Phase 0. They remain in the tree only as reference during migration and will be removed in later phases.
+The legacy `meshchatx/meshchat.py` LXMF backend is **not used**. It remains in the tree as reference during migration.
 
 ## File Transfer (planned — Phase 3)
 
@@ -144,9 +149,9 @@ cd android && ./gradlew :app:assembleDebug
 
 | Phase | Focus | Status |
 |-------|-------|--------|
-| **0** | Import MeshChatX UI, strip LXMF/LXST backend, stub API, boot | **Current** |
-| **1** | RNS core, identities, peer discovery | Planned |
-| **2** | Text messaging via `RNS.Packet` | Planned |
+| **0** | Import MeshChatX UI, strip LXMF/LXST backend, stub API, boot | Done |
+| **1** | RNS core, identities, peer discovery | Done |
+| **2** | Text messaging via `RNS.Packet` | **Current (v0.3.3)** |
 | **3** | File transfer via `RNS.Resource` | Planned |
 | **4** | Voice calls via `RNS.Buffer` + Opus | Planned |
 | **5** | Video + screen sharing | Planned |

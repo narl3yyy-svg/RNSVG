@@ -10,7 +10,7 @@ from aiohttp import web
 
 from rnsvg.config import AppConfig
 from rnsvg.rns_transport import RNSTransport
-from rnsvg.stub_router import AppState, create_app, public_dir_path
+from rnsvg.router import AppState, create_app, public_dir_path, wire_messaging_events
 from rnsvg.version import __version__
 
 
@@ -24,6 +24,7 @@ def build_application(config: AppConfig) -> web.Application:
         transport=transport,
         public_dir=public_dir_path(),
     )
+    wire_messaging_events(state)
     return create_app(state)
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "rnsvg"
-version = "0.1.0"
+version = "0.3.3"
 description = "Reticulum-native communication — MeshChatX UI on raw RNS (no LXMF/LXST)"
 authors = [{ name = "RNSVG Contributors" }]
 license = "MIT"

@@ -233,6 +233,11 @@ const router = createRouter({
             component: defineAsyncComponent(() => import("./components/tools/ToolsPage.vue")),
         },
         {
+            name: "share-folder",
+            path: "/tools/share-folder",
+            component: defineAsyncComponent(() => import("./components/tools/ShareFolderPage.vue")),
+        },
+        {
             name: "licenses",
             path: "/licenses",
             component: defineAsyncComponent(() => import("./components/licenses/LicensesPage.vue")),

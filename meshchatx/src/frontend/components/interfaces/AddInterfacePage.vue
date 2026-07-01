@@ -168,6 +168,14 @@
                                                 </option>
                                             </select>
                                         </div>
+
+                                        <div
+                                            v-if="selectedInterfaceHelp"
+                                            class="mt-3 rounded-xl border border-blue-200/80 dark:border-blue-900/50 bg-blue-50/80 dark:bg-blue-950/30 p-3 text-sm text-blue-950 dark:text-blue-100 leading-relaxed"
+                                        >
+                                            <div class="font-semibold mb-1">What is this?</div>
+                                            {{ selectedInterfaceHelp }}
+                                        </div>
                                     </div>
                                 </div>
 
@@ -1853,6 +1861,7 @@ import GlobalState from "../../js/GlobalState";
 import MaterialDesignIcon from "../MaterialDesignIcon.vue";
 import BundledDocsHint from "./BundledDocsHint.vue";
 import { RETICULUM_MANUAL_INTERFACES_OVERVIEW_REL } from "../../js/reticulumDocsEntryUrl.js";
+import { helpForInterfaceType } from "../../js/rnsvgInterfaceHelp.js";
 
 export default {
     name: "AddInterfacePage",
@@ -2044,6 +2053,12 @@ export default {
         };
     },
     computed: {
+        selectedInterfaceHelp() {
+            if (!this.newInterfaceType) {
+                return "";
+            }
+            return helpForInterfaceType(this.newInterfaceType);
+        },
         communityPresetsEnabled() {
             if (this.isEditingInterface) {
                 return false;

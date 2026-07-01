@@ -133,6 +133,14 @@ export default {
             searchQuery: "",
             tools: [
                 {
+                    name: "share-folder",
+                    route: { name: "share-folder" },
+                    icon: "folder-share",
+                    iconBg: "tool-card__icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-200",
+                    titleKey: "share.title",
+                    descriptionKey: "share.description",
+                },
+                {
                     name: "ping",
                     route: { name: "ping" },
                     icon: "radar",
@@ -331,7 +339,15 @@ export default {
     },
     computed: {
         filteredTools() {
-            const toolsWithTranslations = this.tools.map((tool) => ({
+            const hidden = new Set([
+                "bots",
+                "propagation-nodes",
+                "micron-editor",
+                "paper-message",
+            ]);
+            const toolsWithTranslations = this.tools
+                .filter((tool) => !hidden.has(tool.name))
+                .map((tool) => ({
                 ...tool,
                 title: tool.title || (tool.titleKey ? this.$t(tool.titleKey) : ""),
                 description: tool.description || (tool.descriptionKey ? this.$t(tool.descriptionKey) : ""),

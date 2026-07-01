@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.3] - 2026-06-30
+
+### Added
+
+- **Phase 2 messaging**: Text messages sent over raw `RNS.Packet` to peer `rnsvg.inbox` destinations.
+- **WebSocket events**: `lxmf.delivery` and `lxmf_message_created` broadcasts for live UI updates.
+- **Conversation pagination**: `count`, `order`, and `after_id` query parameters on conversation API.
+
+### Fixed
+
+- **Inbound source hash**: Derive sender node hash from packet transport identity instead of local destination.
+- **Outbound routing**: Resolve peer inbox from announce/identity data (not generic OUT destination).
+- **Conversations list**: Look up peer display names from `rnsvg.node` announces.
+
+## [0.3.0] - 2026-06-30
+
+### Added
+
+- **Phase 1**: Persistent multi-identity management, `rnsvg.node` announces, peer discovery.
+- **UI**: RNSVG branding, share folder page, interface help, hidden legacy LXMF/LXST tools.
+- **Persistence**: Tutorial and changelog seen state saved to `~/.rnsvg/state.json`.
+
+### Fixed
+
+- Reticulum startup crashes (`dest.register`, AutoInterface port conflicts, invalid `LocalInterface`).
+- Identity hash display, interfaces tab `configobj` import.
+
 ## [4.7.1] - 2026-06-21
 
 ### Fixed

@@ -45,18 +45,64 @@ def announce_response() -> dict[str, str]:
 
 
 def identities_response(transport: RNSTransport) -> dict[str, list[dict[str, Any]]]:
-    identities: list[dict[str, Any]] = []
-    identity = transport.identity
-    if identity is not None:
-        identities.append(
+    return {
+        "identities": transport.identity_manager.list_identities(transport.current_identity_hash),
+    }
+
+
+def announces_response(
+    transport: RNSTransport,
+    *,
+    aspect: str | None = None,
+    identity_hash: str | None = None,
+    destination_hash: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> dict[str, Any]:
+    from rnsvg.discovery import ASPECT_API_ALIASES
+
+    records, total = transport.discovery.list_announces(
+        aspect=aspect,
+        identity_hash=identity_hash,
+        destination_hash=destination_hash,
+        limit=limit,
+        offset=offset,
+    )
+    aspect_override = aspect if aspect in ASPECT_API_ALIASES else None
+    return {
+        "announces": [
+            transport.discovery.to_api_dict(r, aspect_override=aspect_override) for r in records
+        ],
+        "total_count": total,
+    }
+
+
+def lxmf_conversations_response(transport: RNSTransport) -> dict[str, list[dict[str, Any]]]:
+    local_hash = transport.node_destination_hash or ""
+    conversations: list[dict[str, Any]] = []
+    for row in transport.database.get_conversations(local_hash):
+        peer = row["peer_hash"]
+        records, _ = transport.discovery.list_announces(aspect="rnsvg.node", destination_hash=peer)
+        display_name = records[0].display_name if records else "Anonymous Peer"
+        conversations.append(
             {
-                "identity_hash": identity.hash.hex(),
-                "display_name": "RNSVG",
-                "is_current": True,
-                "message_count": 0,
+                "display_name": display_name,
+                "custom_display_name": None,
+                "contact_image": None,
+                "destination_hash": peer,
+                "is_unread": False,
+                "is_tracking": False,
+                "failed_messages_count": 0,
+                "has_attachments": False,
+                "latest_message_title": row.get("title"),
+                "latest_message_preview": row.get("content"),
+                "latest_message_created_at": row.get("created_at"),
+                "lxmf_user_icon": None,
+                "is_contact": False,
+                "updated_at": row.get("created_at"),
             },
         )
-    return {"identities": identities}
+    return {"conversations": conversations}
 
 
 def notifications_response() -> dict[str, Any]:
@@ -93,12 +139,8 @@ def propagation_node_status() -> dict[str, Any]:
     }
 
 
-def telephone_status() -> dict[str, Any]:
-    return {
-        "enabled": False,
-        "message": "Telephone is disabled",
-        "active_call": None,
-    }
+def telephone_status(transport: RNSTransport) -> dict[str, Any]:
+    return transport.telephony.status()
 
 
 def telephone_ringtone_status() -> dict[str, Any]:
@@ -118,16 +160,22 @@ def build_config_dict(transport: RNSTransport) -> dict[str, Any]:
         identity.get_public_key().hex() if identity is not None else ""
     )
 
+    telephony_hash = (
+        transport.telephony_destination.hash.hex()
+        if transport.telephony_destination is not None
+        else None
+    )
     return {
-        "display_name": "RNSVG",
+        "display_name": transport.display_name,
         "identity_hash": identity_hash,
         "identity_public_key": identity_public_key,
-        "lxmf_address_hash": None,
-        "telephone_address_hash": None,
+        "lxmf_address_hash": transport.node_destination_hash,
+        "node_address_hash": transport.node_destination_hash,
+        "telephone_address_hash": telephony_hash,
         "is_transport_enabled": transport.transport_enabled(),
-        "auto_announce_enabled": False,
-        "auto_announce_interval_seconds": 300,
-        "last_announced_at": None,
+        "auto_announce_enabled": transport._config.state.auto_announce_enabled,
+        "auto_announce_interval_seconds": transport._config.state.auto_announce_interval_seconds,
+        "last_announced_at": transport._config.state.last_announced_at,
         "theme": "dark",
         "language": "en",
         "auto_resend_failed_messages_when_announce_received": True,
@@ -183,7 +231,7 @@ def build_config_dict(transport: RNSTransport) -> dict[str, Any]:
         "map_tile_server_url": None,
         "map_nominatim_api_url": None,
         "do_not_disturb_enabled": False,
-        "telephone_enabled": False,
+        "telephone_enabled": transport._config.state.telephone_enabled,
         "telephone_allow_calls_from_contacts_only": False,
         "telephone_announce_enabled": False,
         "telephone_audio_profile_id": None,
@@ -270,7 +318,7 @@ def app_info_envelope(config: AppConfig, transport: RNSTransport) -> dict[str, d
             total_paths = 0
 
     storage_path = str(config.data_dir)
-    database_path = str(config.data_dir / "meshchat.db")
+    database_path = str(config.database_path)
 
     return {
         "app_info": {
@@ -327,8 +375,8 @@ def app_info_envelope(config: AppConfig, transport: RNSTransport) -> dict[str, d
             "integrity_issues": [],
             "database_health_issues": [],
             "user_guidance": [],
-            "tutorial_seen": False,
-            "changelog_seen_version": "0.0.0",
+            "tutorial_seen": transport._config.state.tutorial_seen,
+            "changelog_seen_version": transport._config.state.changelog_seen_version,
         },
     }
 
